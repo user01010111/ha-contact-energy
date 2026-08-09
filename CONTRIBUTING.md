@@ -1,61 +1,39 @@
-# Contribution guidelines
+# Contributing
 
-Contributing to this project should be as easy and transparent as possible, whether it's:
+Bug reports, focused fixes, tests, and documentation improvements are welcome. Please keep changes narrow enough to review and avoid including real Contact Energy account data in issues, fixtures, commits, or pull requests.
 
-- Reporting a bug
-- Discussing the current state of the code
-- Submitting a fix
-- Proposing new features
+## Before opening an issue
 
-## Github is used for everything
+Search the [existing issues](https://github.com/user01010111/ha-contact-energy/issues) and use the supplied form. Redact email addresses, physical addresses, ICPs, account and contract identifiers, credentials, sessions, cookies, headers, API keys, and complete usage URLs.
 
-Github is used to host code, to track issues and feature requests, as well as accept pull requests.
+Suspected security vulnerabilities must follow [SECURITY.md](.github/SECURITY.md), not the public issue tracker.
 
-Pull requests are the best way to propose changes to the codebase.
+## Development setup
 
-1. Fork the repo and create your branch from `main`.
-2. If you've changed something, update the documentation.
-3. Make sure your code lints (using `scripts/lint`).
-4. Test you contribution.
-5. Issue that pull request!
+The devcontainer installs Python 3.14 and the pinned development requirements. From an equivalent local Python 3.14 environment:
 
-## Any contributions you make will be under the MIT Software License
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
 
-In short, when you submit code changes, your submissions are understood to be under the same [MIT License](http://choosealicense.com/licenses/mit/) that covers the project. Feel free to contact the maintainers if that's a concern.
+Run the same checks used in CI:
 
-## Report bugs using Github's [issues](../../issues)
+```bash
+scripts/lint
+.venv/bin/python -m pytest
+.venv/bin/hass --script check_config -c config
+```
 
-GitHub issues are used to track public bugs.
-Report a bug by [opening a new issue](../../issues/new/choose); it's that easy!
+`scripts/lint` only checks files. To apply Ruff's safe fixes and formatter explicitly, run:
 
-## Write bug reports with detail, background, and sample code
+```bash
+.venv/bin/python -m ruff check . --fix
+.venv/bin/python -m ruff format .
+```
 
-**Great Bug Reports** tend to have:
+## Pull requests
 
-- A quick summary and/or background
-- Steps to reproduce
-  - Be specific!
-  - Give sample code if you can.
-- What you expected would happen
-- What actually happens
-- Notes (possibly including why you think this might be happening, or stuff you tried that didn't work)
+Create a branch from `main`, add regression coverage for behavior changes, update relevant documentation, and describe the user-visible effect and validation performed. Do not commit generated caches, Home Assistant configuration state, credentials, recorder databases, or captured API bodies.
 
-People *love* thorough bug reports. I'm not even kidding.
-
-## Use a Consistent Coding Style
-
-Use [black](https://github.com/ambv/black) to make sure the code follows the style.
-
-## Test your code modification
-
-This custom component is based on [integration_blueprint template](https://github.com/ludeeus/integration_blueprint).
-
-It comes with development environment in a container, easy to launch
-if you use Visual Studio Code. With this container you will have a stand alone
-Home Assistant instance running and already configured with the included
-[`configuration.yaml`](./config/configuration.yaml)
-file.
-
-## License
-
-By contributing, you agree that your contributions will be licensed under its MIT License.
+All contributions are licensed under the repository's [MIT License](LICENSE).
