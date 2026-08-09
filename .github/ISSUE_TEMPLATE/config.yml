@@ -1,1 +1,5 @@
 blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/user01010111/ha-contact-energy/security/advisories/new
+    about: Report integration or release-pipeline vulnerabilities privately.

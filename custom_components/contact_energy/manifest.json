@@ -2,17 +2,16 @@
 	"domain": "contact_energy",
 	"name": "Contact Energy",
 	"codeowners": [
-		"@notf0und"
+		"@user01010111"
 	],
 	"config_flow": true,
 	"dependencies": [
 		"recorder"
 	],
-	"documentation": "https://github.com/notf0und/ha-contact-energy",
+	"documentation": "https://github.com/user01010111/ha-contact-energy",
+	"integration_type": "service",
 	"iot_class": "cloud_polling",
-	"issue_tracker": "https://github.com/notf0und/ha-contact-energy/issues",
-	"requirements": [
-		"aiohttp>=3.8.0"
-	],
-	"version": "1.0.0"
+	"issue_tracker": "https://github.com/user01010111/ha-contact-energy/issues",
+	"requirements": [],
+	"version": "2.0.0"
 }

@@ -3,7 +3,9 @@
 	"country": [
 		"NZ"
 	],
-	"hide_default_branch": false,
+	"filename": "contact_energy.zip",
+	"hide_default_branch": true,
+	"homeassistant": "2026.8.1",
 	"render_readme": true,
-	"zip_release": false
+	"zip_release": true
 }

@@ -1,4 +1,4 @@
-"""Privacy-conscious asynchronous client for Contact Energy's customer API."""
+"""Asynchronous client for Contact Energy's customer API."""
 
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ API_BASE_URL = "https://api.contact-digital-prod.net"
 # publicly distributed application/gateway identifier, not a customer secret.
 # Contact has not published a formal classification. Customer data still
 # requires independent username, password, and session authentication. The
-# public bundle can rotate this identifier, so it must be reviewed when
-# authentication stops working rather than moved or obfuscated in this package.
+# Contact may rotate this public application identifier. If authentication stops
+# working, compare it with the current MyAccount bundle and update it in a release.
 PUBLIC_APPLICATION_API_KEY = "wg8mXRp7kQ82aOT7mTkzl9fsULf1sEcu7WMGtn6C"
 
 REQUEST_TIMEOUT = 30
