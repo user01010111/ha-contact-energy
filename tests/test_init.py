@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import Platform
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
@@ -59,6 +61,10 @@ async def test_one_client_runtime_and_clean_unload(hass, mock_config_entry) -> N
             "async_config_entry_first_refresh",
             AsyncMock(),
         ),
+        patch(
+            "custom_components.contact_energy.ContactEnergyCoordinator.async_refresh",
+            AsyncMock(),
+        ) as refresh,
         patch.object(
             hass.config_entries,
             "async_forward_entry_setups",
@@ -76,7 +82,73 @@ async def test_one_client_runtime_and_clean_unload(hass, mock_config_entry) -> N
         assert await async_unload_entry(hass, mock_config_entry)
 
     forward.assert_awaited_once()
+    refresh.assert_awaited_once()
     unload.assert_awaited_once()
+
+
+async def test_entry_reload_does_not_wait_for_history_backfill(
+    hass,
+    mock_config_entry,
+    accounts_payload,
+    recorder_dependency,
+    monkeypatch,
+) -> None:
+    history_started = asyncio.Event()
+    first_history_cancelled = asyncio.Event()
+    replacement_history_started = asyncio.Event()
+    replacement_history_finished = asyncio.Event()
+    allow_history_to_finish = asyncio.Event()
+    history_attempts = 0
+
+    async def slow_usage(_requested_date: str) -> list[dict[str, object]]:
+        nonlocal history_attempts
+        history_attempts += 1
+        current_attempt = history_attempts
+        if current_attempt == 1:
+            history_started.set()
+        else:
+            replacement_history_started.set()
+        try:
+            await allow_history_to_finish.wait()
+        except asyncio.CancelledError:
+            if current_attempt == 1:
+                first_history_cancelled.set()
+            raise
+        if current_attempt == 4:
+            replacement_history_finished.set()
+        return []
+
+    monkeypatch.setattr(
+        "custom_components.contact_energy.coordinator.HISTORY_REQUEST_SPACING",
+        0,
+    )
+    mock_config_entry.add_to_hass(hass)
+    with (
+        patch(
+            "custom_components.contact_energy.ContactEnergyApi.async_get_accounts",
+            AsyncMock(return_value=accounts_payload),
+        ),
+        patch(
+            "custom_components.contact_energy.ContactEnergyApi.async_get_usage",
+            AsyncMock(side_effect=slow_usage),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        assert mock_config_entry.state is ConfigEntryState.LOADED
+        async with asyncio.timeout(1):
+            await history_started.wait()
+
+        async with asyncio.timeout(1):
+            assert await hass.config_entries.async_reload(mock_config_entry.entry_id)
+        assert mock_config_entry.state is ConfigEntryState.LOADED
+        assert first_history_cancelled.is_set()
+        async with asyncio.timeout(1):
+            await replacement_history_started.wait()
+
+        allow_history_to_finish.set()
+        async with asyncio.timeout(1):
+            await replacement_history_finished.wait()
+        await asyncio.sleep(0)
 
 
 async def test_setup_migrates_legacy_registry_identifiers(
