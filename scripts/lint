@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-ruff check . --fix
+python_command="python3"
+if [[ -x .venv/bin/python ]]; then
+    python_command=".venv/bin/python"
+fi
+
+"${python_command}" -m ruff check .
+"${python_command}" -m ruff format --check .

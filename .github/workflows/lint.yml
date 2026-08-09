@@ -1,29 +1,51 @@
-name: "Lint"
+name: Lint and test
 
 on:
   push:
     branches:
-      - "main"
+      - main
   pull_request:
     branches:
-      - "main"
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   ruff:
-    name: "Ruff"
-    runs-on: "ubuntu-latest"
+    name: Ruff
+    runs-on: ubuntu-latest
     steps:
-        - name: "Checkout the repository"
-          uses: "actions/checkout@v4.1.0"
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Install development requirements
+        run: python3 -m pip install -r requirements.txt
+      - name: Run Ruff
+        run: |
+          python3 -m ruff check .
+          python3 -m ruff format --check .
+      - name: Scan for committed credentials
+        run: python3 scripts/check_credentials.py
 
-        - name: "Set up Python"
-          uses: actions/setup-python@v5.0.0
-          with:
-            python-version: "3.11"
-            cache: "pip"
-
-        - name: "Install requirements"
-          run: python3 -m pip install -r requirements.txt
-
-        - name: "Run"
-          run: python3 -m ruff check .
+  pytest:
+    name: Pytest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Install development requirements
+        run: python3 -m pip install -r requirements.txt
+      - name: Run tests
+        run: python3 -m pytest
+      - name: Check Home Assistant configuration
+        run: python3 -m homeassistant --script check_config -c config

@@ -1,13 +1,16 @@
 # artifacts
 __pycache__
 .pytest*
+.venv/
 *.egg-info
 */build/*
 */dist/*
+/dist/
 
 
 # misc
 .coverage
+.DS_Store
 .vscode
 coverage.xml
 
