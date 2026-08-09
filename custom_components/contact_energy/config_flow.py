@@ -1,183 +1,229 @@
-"""Config flow for Contact Energy integration."""
-import asyncio
-import logging
-import voluptuous as vol
-import aiohttp
+"""Config and reauthentication flows for Contact Energy."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
 from typing import Any
 
+import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-import homeassistant.helpers.config_validation as cv
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 
-from .api import ContactEnergyApi, CannotConnect, InvalidAuth, UnknownError
+from .api import (
+    CannotConnect,
+    ContactEnergyApi,
+    InvalidAuth,
+    MalformedResponse,
+    RetryableApiError,
+    UnexpectedResponse,
+)
 from .const import (
-    DOMAIN,
-    CONF_USAGE_DAYS,
     CONF_ACCOUNT_ID,
+    CONF_CONTRACT_ICP,
     CONF_CONTRACT_ID,
-    CONF_CONTRACT_ICP
+    CONF_USAGE_DAYS,
+    DEFAULT_USAGE_DAYS,
+    DOMAIN,
+    MAX_USAGE_DAYS,
+    MIN_USAGE_DAYS,
+    contract_digest,
 )
+from .models import Contract, parse_contracts
 
-_LOGGER = logging.getLogger(__name__)
 
-STEP_USER_DATA_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_EMAIL): cv.string,
-        vol.Required(CONF_PASSWORD): cv.string,
-        vol.Optional(CONF_USAGE_DAYS, default=10): cv.positive_int,
-    }
-)
-
-async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
-    """Validate the user input allows us to connect."""
-    _LOGGER.debug("Starting validation for email: %s", data[CONF_EMAIL])
-    
-    try:
-        api = ContactEnergyApi(hass, data[CONF_EMAIL], data[CONF_PASSWORD])
-        if not await api.async_login():
-            _LOGGER.error("Login failed for email: %s", data[CONF_EMAIL])
-            raise InvalidAuth
-        
-        # Fetch accounts after successful login
-        accounts_data = await api.async_get_accounts()
-        if not accounts_data or "accountDetail" not in accounts_data:
-            _LOGGER.error("No accounts found for email: %s", data[CONF_EMAIL])
-            raise UnknownError("No accounts found")
-
-        # Extract available contracts
-        account_id = accounts_data["accountDetail"]["id"]
-        contracts = []
-        for contract in accounts_data["accountDetail"]["contracts"]:
-            if contract["contractType"] == 1:  # Electricity contracts only
-                contracts.append({
-                    "id": contract["id"],
-                    "address": contract["premise"]["supplyAddress"]["shortForm"],
-                    "account_id": account_id,
-                    "icp": contract["icp"]
-                })
-        
-        if not contracts:
-            _LOGGER.error("No electricity contracts found for email: %s", data[CONF_EMAIL])
-            raise UnknownError("No electricity contracts found")
-        
-        _LOGGER.info("Successfully authenticated Contact Energy account: %s", data[CONF_EMAIL])
-        return {
-            "title": f"Contact Energy ({data[CONF_EMAIL]})",
-            "email": data[CONF_EMAIL],
-            "password": data[CONF_PASSWORD],
-            "contracts": contracts
+def _user_schema(suggested: Mapping[str, Any] | None = None) -> vol.Schema:
+    """Return the bounded initial setup schema."""
+    values = suggested or {}
+    email_key = (
+        vol.Required(CONF_EMAIL, default=values[CONF_EMAIL])
+        if CONF_EMAIL in values
+        else vol.Required(CONF_EMAIL)
+    )
+    return vol.Schema(
+        {
+            email_key: cv.string,
+            vol.Required(CONF_PASSWORD): cv.string,
+            vol.Optional(
+                CONF_USAGE_DAYS,
+                default=values.get(CONF_USAGE_DAYS, DEFAULT_USAGE_DAYS),
+            ): vol.All(
+                vol.Coerce(int),
+                vol.Range(min=MIN_USAGE_DAYS, max=MAX_USAGE_DAYS),
+            ),
         }
-        
-    except aiohttp.ClientError as error:
-        _LOGGER.error("Connection error during validation: %s", str(error))
-        raise CannotConnect from error
-    except asyncio.TimeoutError as error:
-        _LOGGER.error("Timeout error during validation: %s", str(error))
-        raise CannotConnect from error
-    except InvalidAuth as error:
-        _LOGGER.error("Invalid authentication for email: %s", data[CONF_EMAIL])
-        raise error
-    except Exception as error:
-        _LOGGER.exception("Unexpected error during validation: %s", str(error))
-        raise UnknownError from error
+    )
+
+
+async def validate_input(
+    hass: HomeAssistant, data: Mapping[str, Any]
+) -> list[Contract]:
+    """Validate credentials and return selectable electricity contracts."""
+    api = ContactEnergyApi(hass, data[CONF_EMAIL], data[CONF_PASSWORD])
+    await api.async_login()
+    return parse_contracts(await api.async_get_accounts())
+
 
 class ContactEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Contact Energy."""
+    """Handle Contact Energy configuration and reauthentication."""
 
     VERSION = 1
 
-    def __init__(self):
-        """Initialize the config flow."""
-        self._current_input = {}
-        self._contracts = []
-        self._validated_data = None
+    def __init__(self) -> None:
+        """Initialize transient flow state."""
+        self._entry_data: dict[str, Any] = {}
+        self._contracts: list[Contract] = []
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle the initial step."""
+    ) -> ConfigFlowResult:
+        """Validate credentials and collect the selected contract."""
         errors: dict[str, str] = {}
-
         if user_input is not None:
             try:
-                self._validated_data = await validate_input(self.hass, user_input)
-                self._contracts = self._validated_data["contracts"]
-                self._current_input.update(user_input)
-                
-                # If only one contract is available, skip the selection step
-                if len(self._contracts) == 1:
-                    contract = self._contracts[0]
-                    user_input[CONF_ACCOUNT_ID] = contract["account_id"]
-                    user_input[CONF_CONTRACT_ID] = contract["id"]
-                    user_input[CONF_CONTRACT_ICP] = contract["icp"]
-                    
-                    await self.async_set_unique_id(contract["id"])
-                    self._abort_if_unique_id_configured()
-                    
-                    return self.async_create_entry(
-                        title=f"{self._validated_data['title']} - {contract['address']}",
-                        data=user_input
-                    )
-                
-                return await self.async_step_contract()
-                
+                self._contracts = await validate_input(self.hass, user_input)
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
-            except CannotConnect:
+            except CannotConnect, RetryableApiError:
                 errors["base"] = "cannot_connect"
-            except Exception as error:
-                _LOGGER.exception("Unexpected error in config flow: %s", error)
+            except MalformedResponse, UnexpectedResponse:
                 errors["base"] = "unknown"
+            else:
+                self._entry_data = dict(user_input)
+                if len(self._contracts) == 1:
+                    return await self._async_create_contract_entry(self._contracts[0])
+                return await self.async_step_contract()
 
-        # Preserve form values
-        schema = self.add_suggested_values_to_schema(
-            STEP_USER_DATA_SCHEMA, self._current_input
-        )
-
+        suggested = {
+            key: value
+            for key, value in (user_input or {}).items()
+            if key != CONF_PASSWORD
+        }
         return self.async_show_form(
             step_id="user",
-            data_schema=schema,
+            data_schema=_user_schema(suggested),
             errors=errors,
         )
 
     async def async_step_contract(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle contract selection step."""
+    ) -> ConfigFlowResult:
+        """Select one validated electricity contract."""
         errors: dict[str, str] = {}
-
         if user_input is not None:
-            selected_contract = next(
-                (c for c in self._contracts if c["id"] == user_input[CONF_CONTRACT_ID]),
-                None
+            selected = next(
+                (
+                    contract
+                    for contract in self._contracts
+                    if contract.contract_id == user_input[CONF_CONTRACT_ID]
+                ),
+                None,
             )
-            if selected_contract:
-                self._current_input[CONF_ACCOUNT_ID] = selected_contract["account_id"]
-                self._current_input[CONF_CONTRACT_ID] = selected_contract["id"]
-                self._current_input[CONF_CONTRACT_ICP] = selected_contract['icp']
-                
-                await self.async_set_unique_id(selected_contract["id"])
-                self._abort_if_unique_id_configured()
-                
-                return self.async_create_entry(
-                    title=f"{self._validated_data['title']} - {selected_contract['address']}",
-                    data=self._current_input
-                )
-            else:
-                errors["base"] = "invalid_contract"
+            if selected is not None:
+                return await self._async_create_contract_entry(selected)
+            errors["base"] = "invalid_contract"
 
-        # Create schema for contract selection
-        contract_schema = vol.Schema({
-            vol.Required(CONF_CONTRACT_ID): vol.In({
-                c["id"]: f"{c['id']} - {c['address']}"
-                for c in self._contracts
-            }),
-        })
-
+        contract_labels = {
+            contract.contract_id: f"Electricity contract {index}: {contract.address}"
+            for index, contract in enumerate(self._contracts, start=1)
+        }
         return self.async_show_form(
             step_id="contract",
-            data_schema=contract_schema,
+            data_schema=vol.Schema(
+                {vol.Required(CONF_CONTRACT_ID): vol.In(contract_labels)}
+            ),
+            errors=errors,
+        )
+
+    async def _async_create_contract_entry(
+        self, contract: Contract
+    ) -> ConfigFlowResult:
+        """Create one contract-scoped config entry."""
+        if any(
+            entry.data.get(CONF_CONTRACT_ID) == contract.contract_id
+            for entry in self._async_current_entries()
+        ):
+            return self.async_abort(reason="already_configured")
+        await self.async_set_unique_id(
+            contract_digest(contract.account_id, contract.contract_id, contract.icp)
+        )
+        self._abort_if_unique_id_configured()
+        data = {
+            **self._entry_data,
+            CONF_ACCOUNT_ID: contract.account_id,
+            CONF_CONTRACT_ID: contract.contract_id,
+            CONF_CONTRACT_ICP: contract.icp,
+        }
+        return self.async_create_entry(title="Contact Energy electricity", data=data)
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        """Start reauthentication for the existing config entry."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Validate new credentials and update the existing entry."""
+        entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                contracts = await validate_input(self.hass, user_input)
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except CannotConnect, RetryableApiError:
+                errors["base"] = "cannot_connect"
+            except MalformedResponse, UnexpectedResponse:
+                errors["base"] = "unknown"
+            else:
+                selected = next(
+                    (
+                        contract
+                        for contract in contracts
+                        if (
+                            contract.account_id == str(entry.data[CONF_ACCOUNT_ID])
+                            and contract.contract_id
+                            == str(entry.data[CONF_CONTRACT_ID])
+                            and contract.icp == str(entry.data[CONF_CONTRACT_ICP])
+                        )
+                    ),
+                    None,
+                )
+                if selected is None:
+                    errors["base"] = "invalid_contract"
+                else:
+                    await self.async_set_unique_id(
+                        contract_digest(
+                            selected.account_id,
+                            selected.contract_id,
+                            selected.icp,
+                        )
+                    )
+                    self._abort_if_unique_id_mismatch()
+                    return self.async_update_reload_and_abort(
+                        entry,
+                        data_updates={
+                            CONF_EMAIL: user_input[CONF_EMAIL],
+                            CONF_PASSWORD: user_input[CONF_PASSWORD],
+                        },
+                    )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_EMAIL,
+                        default=(user_input or {}).get(
+                            CONF_EMAIL, entry.data[CONF_EMAIL]
+                        ),
+                    ): cv.string,
+                    vol.Required(CONF_PASSWORD): cv.string,
+                }
+            ),
             errors=errors,
         )
