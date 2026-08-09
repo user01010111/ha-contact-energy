@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+from homeassistant.components.sensor import SensorDeviceClass
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.contact_energy import _contract_key
@@ -66,3 +67,15 @@ def test_usage_allows_downward_corrections_and_money_is_nzd(hass) -> None:
 
     assert usage.state_class == "total"
     assert money.native_unit_of_measurement == DEFAULT_CURRENCY
+    assert money.state_class is None
+
+
+def test_monetary_descriptions_do_not_use_a_measurement_state_class() -> None:
+    monetary_descriptions = [
+        description
+        for description in SENSOR_DESCRIPTIONS
+        if description.device_class is SensorDeviceClass.MONETARY
+    ]
+
+    assert len(monetary_descriptions) == 3
+    assert all(description.state_class is None for description in monetary_descriptions)
