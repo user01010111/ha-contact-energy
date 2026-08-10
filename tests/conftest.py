@@ -15,6 +15,7 @@ from custom_components.contact_energy.const import (
     CONF_USAGE_DAYS,
     DOMAIN,
     contract_digest,
+    contract_entry_title,
 )
 
 pytest_plugins = "pytest_homeassistant_custom_component"
@@ -49,7 +50,7 @@ def mock_config_entry(entry_data: dict[str, Any]) -> MockConfigEntry:
     """Return a synthetic Contact Energy config entry."""
     return MockConfigEntry(
         domain=DOMAIN,
-        title="Contact Energy electricity",
+        title=contract_entry_title(TEST_ICP),
         data=entry_data,
         unique_id=contract_digest(TEST_ACCOUNT_ID, TEST_CONTRACT_ID, TEST_ICP),
     )

@@ -15,16 +15,32 @@ from custom_components.contact_energy.const import (
     CONTRACT_KEY_LENGTH,
     DEFAULT_CURRENCY,
     DOMAIN,
+    contract_device_name,
+    contract_entry_title,
 )
 from custom_components.contact_energy.sensor import (
     SENSOR_DESCRIPTIONS,
     ContactEnergySensor,
 )
 
+from .conftest import TEST_ICP
+
+
+def test_icp_display_names_balance_identification_and_log_privacy() -> None:
+    icp = "000123456789012"
+
+    assert contract_entry_title(icp) == "Contact Energy electricity (ICP …789012)"
+    assert icp not in contract_entry_title(icp)
+    assert contract_device_name(icp) == f"Contact Energy electricity (ICP {icp})"
+
 
 def test_contract_keys_are_unique_and_opaque(entry_data) -> None:
     first = MockConfigEntry(domain=DOMAIN, data=entry_data)
-    second_data = {**entry_data, CONF_CONTRACT_ID: "contract-second"}
+    second_data = {
+        **entry_data,
+        CONF_CONTRACT_ID: "contract-second",
+        CONF_CONTRACT_ICP: "icp-second",
+    }
     second = MockConfigEntry(domain=DOMAIN, data=second_data)
 
     first_key = _contract_key(first)
@@ -42,28 +58,41 @@ def test_multiple_contracts_produce_unique_entity_ids(hass, entry_data) -> None:
     first_entry = MockConfigEntry(domain=DOMAIN, data=entry_data)
     second_entry = MockConfigEntry(
         domain=DOMAIN,
-        data={**entry_data, CONF_CONTRACT_ID: "contract-second"},
+        data={
+            **entry_data,
+            CONF_CONTRACT_ID: "contract-second",
+            CONF_CONTRACT_ICP: "icp-second",
+        },
     )
     coordinator = MagicMock(hass=hass)
 
     first = ContactEnergySensor(
         coordinator,
         _contract_key(first_entry),
+        str(first_entry.data[CONF_CONTRACT_ICP]),
         SENSOR_DESCRIPTIONS[0],
     )
     second = ContactEnergySensor(
         coordinator,
         _contract_key(second_entry),
+        str(second_entry.data[CONF_CONTRACT_ICP]),
         SENSOR_DESCRIPTIONS[0],
     )
 
     assert first.unique_id != second.unique_id
+    assert first.device_info["name"] == f"Contact Energy electricity (ICP {TEST_ICP})"
+    assert second.device_info["name"] == ("Contact Energy electricity (ICP icp-second)")
+    assert TEST_ICP not in first.unique_id
 
 
 def test_usage_allows_downward_corrections_and_money_is_nzd(hass) -> None:
     coordinator = MagicMock(hass=hass)
-    usage = ContactEnergySensor(coordinator, "contract-key", SENSOR_DESCRIPTIONS[0])
-    money = ContactEnergySensor(coordinator, "contract-key", SENSOR_DESCRIPTIONS[1])
+    usage = ContactEnergySensor(
+        coordinator, "contract-key", TEST_ICP, SENSOR_DESCRIPTIONS[0]
+    )
+    money = ContactEnergySensor(
+        coordinator, "contract-key", TEST_ICP, SENSOR_DESCRIPTIONS[1]
+    )
 
     assert usage.state_class == "total"
     assert money.native_unit_of_measurement == DEFAULT_CURRENCY

@@ -13,7 +13,9 @@ Version 2.0.0 continues the `contact_energy` integration under independent maint
 - The existing Contact Energy integration entry is reused.
 - Existing entity IDs are preserved.
 - Raw account, contract, and ICP registry identifiers are replaced in place with opaque contract-scoped identifiers.
-- Device names that previously exposed an ICP are replaced with a neutral Contact Energy name.
+- The integration-list title shows only the final six ICP characters, while the device and new statistic display names show the full ICP so multiple properties remain identifiable.
+
+The full ICP is display metadata, not part of the active entity, device, configuration, or statistic identifier. Treat Home Assistant screenshots and exported registry data containing an ICP as private account information.
 
 ## What requires manual selection
 

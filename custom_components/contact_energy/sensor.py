@@ -20,7 +20,13 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import ContactEnergyConfigEntry
-from .const import DEFAULT_CURRENCY, DOMAIN, DOMAIN_NAME
+from .const import (
+    CONF_CONTRACT_ICP,
+    DEFAULT_CURRENCY,
+    DOMAIN,
+    DOMAIN_NAME,
+    contract_device_name,
+)
 from .coordinator import ContactEnergyCoordinator, ContactEnergyData
 
 
@@ -104,6 +110,7 @@ async def async_setup_entry(
         ContactEnergySensor(
             runtime.coordinator,
             runtime.contract_key,
+            str(entry.data[CONF_CONTRACT_ICP]),
             description,
         )
         for description in SENSOR_DESCRIPTIONS
@@ -120,6 +127,7 @@ class ContactEnergySensor(CoordinatorEntity[ContactEnergyCoordinator], SensorEnt
         self,
         coordinator: ContactEnergyCoordinator,
         contract_key: str,
+        icp: str,
         description: ContactEnergySensorDescription,
     ) -> None:
         """Initialize a coordinator sensor."""
@@ -128,7 +136,7 @@ class ContactEnergySensor(CoordinatorEntity[ContactEnergyCoordinator], SensorEnt
         self._attr_unique_id = f"{contract_key}_{description.key}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, contract_key)},
-            name="Contact Energy electricity account",
+            name=contract_device_name(icp),
             manufacturer=DOMAIN_NAME,
             model="Cloud account",
             configuration_url="https://auth.contact.co.nz/",

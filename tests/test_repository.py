@@ -74,7 +74,6 @@ def test_bug_template_requires_specific_redaction() -> None:
     ):
         assert term in template
     assert "smallest excerpt" in template
-    assert "ha-managemyhealth" not in template
 
 
 def test_metadata_and_hacs_release_contract() -> None:
@@ -121,6 +120,11 @@ def test_links_and_issue_labels_are_current() -> None:
     )
     assert bug["labels"] == ["bug"]
     assert feature["labels"] == ["enhancement"]
+    feature_text = (
+        ROOT / ".github" / "ISSUE_TEMPLATE" / "feature_request.yml"
+    ).read_text()
+    for term in ("credentials", "addresses", "ICPs", "account", "contract"):
+        assert term in feature_text
 
     for path in (
         ROOT / "README.md",

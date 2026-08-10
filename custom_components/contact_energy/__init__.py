@@ -19,7 +19,9 @@ from .const import (
     CONTRACT_KEY_LENGTH,
     DOMAIN,
     SENSOR_KEYS,
+    contract_device_name,
     contract_digest,
+    contract_entry_title,
 )
 from .coordinator import ContactEnergyCoordinator
 from .statistics import ContactEnergyStatistics
@@ -56,6 +58,7 @@ async def async_setup_entry(
         hass,
         entry.entry_id,
         contract_key,
+        str(entry.data[CONF_CONTRACT_ICP]),
     )
     coordinator = ContactEnergyCoordinator(hass, entry, client, statistics)
     entry.runtime_data = ContactEnergyRuntimeData(
@@ -157,7 +160,7 @@ def _migrate_legacy_registry(
     hass.config_entries.async_update_entry(
         entry,
         unique_id=digest,
-        title="Contact Energy electricity",
+        title=contract_entry_title(icp),
     )
     for entity_id, target_unique_id in entity_updates:
         entity_registry.async_update_entity(
@@ -168,5 +171,10 @@ def _migrate_legacy_registry(
         device_registry.async_update_device(
             legacy_device.id,
             new_identifiers={(DOMAIN, contract_key)},
-            name="Contact Energy electricity account",
+            name=contract_device_name(icp),
+        )
+    elif target_device is not None:
+        device_registry.async_update_device(
+            target_device.id,
+            name=contract_device_name(icp),
         )
