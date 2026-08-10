@@ -12,9 +12,12 @@ from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.contact_energy.config_flow import _user_schema
 from custom_components.contact_energy.const import (
+    CONF_ACCOUNT_ID,
+    CONF_CONTRACT_ICP,
     CONF_CONTRACT_ID,
     CONF_USAGE_DAYS,
     DOMAIN,
+    contract_entry_title,
 )
 from custom_components.contact_energy.models import Contract
 
@@ -51,6 +54,11 @@ async def test_successful_flow_with_contract_selection(
         )
         assert result["type"] is FlowResultType.FORM
         assert result["step_id"] == "contract"
+        contract_validator = next(iter(result["data_schema"].schema.values()))
+        assert contract_validator.container == {
+            "contract-a": "Electricity contract 1: Example address A (ICP icp-a)",
+            "contract-b": "Electricity contract 2: Example address B (ICP icp-b)",
+        }
 
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
@@ -58,7 +66,7 @@ async def test_successful_flow_with_contract_selection(
         )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == "Contact Energy electricity"
+    assert result["title"] == contract_entry_title("icp-b")
     assert result["data"][CONF_CONTRACT_ID] == "contract-b"
     assert result["data"][CONF_PASSWORD] == TEST_PASSWORD
     assert result["result"].unique_id not in {
@@ -111,6 +119,32 @@ async def test_existing_legacy_entry_prevents_duplicate_setup(
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
+
+
+async def test_same_contract_id_on_another_account_can_be_configured(
+    hass, mock_config_entry, recorder_dependency
+) -> None:
+    mock_config_entry.add_to_hass(hass)
+    contract = Contract(
+        TEST_CONTRACT_ID,
+        "different-account",
+        "different-icp",
+        "Another example address",
+    )
+    with patch(
+        "custom_components.contact_energy.config_flow.validate_input",
+        AsyncMock(return_value=[contract]),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": SOURCE_USER},
+            data=USER_INPUT,
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_ACCOUNT_ID] == "different-account"
+    assert result["data"][CONF_CONTRACT_ICP] == "different-icp"
+    assert result["title"] == contract_entry_title("different-icp")
 
 
 async def test_invalid_credentials_show_form_error(hass, recorder_dependency) -> None:

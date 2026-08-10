@@ -16,6 +16,7 @@ DEFAULT_USAGE_DAYS: Final = 10
 MIN_USAGE_DAYS: Final = 3
 MAX_USAGE_DAYS: Final = 31
 CONTRACT_KEY_LENGTH: Final = 24
+ICP_TITLE_SUFFIX_LENGTH: Final = 6
 DEFAULT_CURRENCY: Final = "NZD"
 UPDATE_INTERVAL: Final = timedelta(hours=8)
 
@@ -46,3 +47,19 @@ def contract_digest(account_id: object, contract_id: object, icp: object) -> str
     """Return an opaque stable digest for a Contact electricity contract."""
     identity = ":".join(str(value) for value in (account_id, contract_id, icp))
     return hashlib.sha256(identity.encode()).hexdigest()
+
+
+def contract_entry_title(icp: object) -> str:
+    """Return an entry title that distinguishes contracts without logging a full ICP."""
+    value = str(icp)
+    visible = (
+        value
+        if len(value) <= ICP_TITLE_SUFFIX_LENGTH
+        else f"…{value[-ICP_TITLE_SUFFIX_LENGTH:]}"
+    )
+    return f"{DOMAIN_NAME} electricity (ICP {visible})"
+
+
+def contract_device_name(icp: object) -> str:
+    """Return the authenticated Home Assistant display name for a contract."""
+    return f"{DOMAIN_NAME} electricity (ICP {icp})"

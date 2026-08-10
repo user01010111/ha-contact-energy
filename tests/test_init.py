@@ -28,6 +28,8 @@ from custom_components.contact_energy.const import (
     CONF_CONTRACT_ID,
     DOMAIN,
     SENSOR_USAGE,
+    contract_device_name,
+    contract_entry_title,
 )
 
 
@@ -197,10 +199,8 @@ async def test_setup_migrates_legacy_registry_identifiers(
     assert device_registry.async_get(legacy_device.id).identifiers == {
         (DOMAIN, contract_key)
     }
-    assert device_registry.async_get(legacy_device.id).name == (
-        "Contact Energy electricity account"
-    )
-    assert mock_config_entry.title == "Contact Energy electricity"
+    assert device_registry.async_get(legacy_device.id).name == contract_device_name(icp)
+    assert mock_config_entry.title == contract_entry_title(icp)
     assert mock_config_entry.unique_id != mock_config_entry.data[CONF_CONTRACT_ICP]
     assert mock_config_entry.unique_id != mock_config_entry.data["contract_id"]
 
@@ -264,3 +264,22 @@ def test_device_migration_is_scoped_to_config_entry(hass, entry_data) -> None:
 
     assert registry.async_get(first_device.id).identifiers == {(DOMAIN, icp)}
     assert registry.async_get(second_device.id).identifiers == {(DOMAIN, second_key)}
+
+
+def test_existing_opaque_device_gets_icp_display_name(hass, mock_config_entry) -> None:
+    mock_config_entry.add_to_hass(hass)
+    contract_key = _contract_key(mock_config_entry)
+    icp = mock_config_entry.data[CONF_CONTRACT_ICP]
+    registry = dr.async_get(hass)
+    device = registry.async_get_or_create(
+        config_entry_id=mock_config_entry.entry_id,
+        identifiers={(DOMAIN, contract_key)},
+        name="Contact Energy electricity account",
+    )
+
+    _migrate_legacy_registry(hass, mock_config_entry, contract_key)
+
+    updated = registry.async_get(device.id)
+    assert updated is not None
+    assert updated.identifiers == {(DOMAIN, contract_key)}
+    assert updated.name == contract_device_name(icp)

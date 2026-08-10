@@ -14,6 +14,8 @@ from custom_components.contact_energy.statistics import (
     StatisticsStateError,
 )
 
+from .conftest import TEST_ICP
+
 
 class FakeStore:
     """In-memory Home Assistant Store substitute."""
@@ -57,6 +59,7 @@ async def test_sums_stay_stable_across_overlap_gap_fill_and_restart(
         hass,
         "entry-example",
         "contract-key-a",
+        TEST_ICP,
         store,
     )
     result = await statistics.async_process([first, second])
@@ -83,6 +86,7 @@ async def test_sums_stay_stable_across_overlap_gap_fill_and_restart(
         hass,
         "entry-example",
         "contract-key-a",
+        TEST_ICP,
         store,
     )
     result = await restarted.async_process([first, second, third])
@@ -113,6 +117,7 @@ async def test_inconsistent_currency_does_not_erase_stored_cost(
         hass,
         "entry-example",
         "contract-key-a",
+        TEST_ICP,
         store,
     )
     original = _point(now - timedelta(hours=1), 1.0, 0.25)
@@ -145,11 +150,11 @@ async def test_oldest_refetched_date_is_not_archived_or_recounted(
     )
     store = FakeStore()
     point = _point(datetime(2026, 7, 9, tzinfo=UTC), 1.0, 0.25)
-    statistics = ContactEnergyStatistics(hass, "entry", "contract", store)
+    statistics = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP, store)
 
     assert (await statistics.async_process([point])).energy == 1.0
     assert (await statistics.async_process([point])).energy == 1.0
-    restarted = ContactEnergyStatistics(hass, "entry", "contract", store)
+    restarted = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP, store)
     assert (await restarted.async_process([point])).energy == 1.0
     assert len(store.data["points"]) == 1
 
@@ -169,7 +174,7 @@ async def test_point_gets_one_final_replay_when_it_crosses_archive_cutoff(
     )
     store = FakeStore()
     point = _point(datetime(2026, 7, 8, tzinfo=UTC), 1.0, 0.25)
-    statistics = ContactEnergyStatistics(hass, "entry", "contract", store)
+    statistics = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP, store)
     await statistics.async_process([point])
 
     imported.clear()
@@ -196,7 +201,7 @@ async def test_partial_cost_preserves_known_value_and_does_not_lock_currency(
     )
     now = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
     store = FakeStore()
-    statistics = ContactEnergyStatistics(hass, "entry", "contract", store)
+    statistics = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP, store)
     original = _point(now - timedelta(hours=2), 1.0, 0.25)
     await statistics.async_process([original])
 
@@ -205,7 +210,7 @@ async def test_partial_cost_preserves_known_value_and_does_not_lock_currency(
     assert result.cost == 0.25
 
     fresh_store = FakeStore()
-    fresh = ContactEnergyStatistics(hass, "entry-2", "contract", fresh_store)
+    fresh = ContactEnergyStatistics(hass, "entry-2", "contract", TEST_ICP, fresh_store)
     no_cost = UsagePoint(now - timedelta(hours=1), 1.0, None, "AUD")
     await fresh.async_process([no_cost])
     valid = _point(no_cost.start, 1.0, 0.4)
@@ -222,7 +227,7 @@ async def test_malformed_persistent_state_blocks_unsafe_totals(hass) -> None:
         "currency": "123",
         "points": {},
     }
-    statistics = ContactEnergyStatistics(hass, "entry", "contract", store)
+    statistics = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP, store)
 
     with pytest.raises(StatisticsStateError):
         await statistics.async_load()
@@ -235,7 +240,9 @@ async def test_conflicting_duplicate_timestamp_is_ignored(hass, monkeypatch) -> 
         lambda *args: imported.append(args),
     )
     now = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
-    statistics = ContactEnergyStatistics(hass, "entry", "contract", FakeStore())
+    statistics = ContactEnergyStatistics(
+        hass, "entry", "contract", TEST_ICP, FakeStore()
+    )
 
     result = await statistics.async_process(
         [_point(now, 1.0, 0.2), _point(now, 2.0, 0.4)]
@@ -245,9 +252,37 @@ async def test_conflicting_duplicate_timestamp_is_ignored(hass, monkeypatch) -> 
     assert imported == []
 
 
+async def test_statistic_names_identify_the_icp_without_exposing_it_in_ids(
+    hass, monkeypatch
+) -> None:
+    imported = []
+    monkeypatch.setattr(
+        "custom_components.contact_energy.statistics.async_add_external_statistics",
+        lambda _hass, metadata, rows: imported.append((metadata, list(rows))),
+    )
+    now = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
+    statistics = ContactEnergyStatistics(
+        hass, "entry", "contract-key", TEST_ICP, FakeStore()
+    )
+
+    await statistics.async_process([_point(now, 1.0, 0.2)])
+
+    names = {metadata["name"] for metadata, _rows in imported}
+    assert names == {
+        f"Contact Energy electricity consumption (ICP {TEST_ICP})",
+        f"Contact Energy electricity cost (ICP {TEST_ICP})",
+    }
+    assert TEST_ICP not in statistics.energy_statistic_id
+    assert TEST_ICP not in statistics.cost_statistic_id
+
+
 def test_multiple_contracts_have_unique_statistic_ids(hass) -> None:
-    first = ContactEnergyStatistics(hass, "entry-a", "contract-a", FakeStore())
-    second = ContactEnergyStatistics(hass, "entry-b", "contract-b", FakeStore())
+    first = ContactEnergyStatistics(hass, "entry-a", "contract-a", "icp-a", FakeStore())
+    second = ContactEnergyStatistics(
+        hass, "entry-b", "contract-b", "icp-b", FakeStore()
+    )
 
     assert first.energy_statistic_id != second.energy_statistic_id
     assert first.cost_statistic_id != second.cost_statistic_id
+    assert "icp-a" not in first.energy_statistic_id
+    assert "icp-b" not in second.cost_statistic_id

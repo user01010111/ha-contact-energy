@@ -30,6 +30,7 @@ from .const import (
     MAX_USAGE_DAYS,
     MIN_USAGE_DAYS,
     contract_digest,
+    contract_entry_title,
 )
 from .models import Contract, parse_contracts
 
@@ -126,7 +127,9 @@ class ContactEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors["base"] = "invalid_contract"
 
         contract_labels = {
-            contract.contract_id: f"Electricity contract {index}: {contract.address}"
+            contract.contract_id: (
+                f"Electricity contract {index}: {contract.address} (ICP {contract.icp})"
+            )
             for index, contract in enumerate(self._contracts, start=1)
         }
         return self.async_show_form(
@@ -142,7 +145,9 @@ class ContactEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Create one contract-scoped config entry."""
         if any(
-            entry.data.get(CONF_CONTRACT_ID) == contract.contract_id
+            str(entry.data.get(CONF_ACCOUNT_ID)) == contract.account_id
+            and str(entry.data.get(CONF_CONTRACT_ID)) == contract.contract_id
+            and str(entry.data.get(CONF_CONTRACT_ICP)) == contract.icp
             for entry in self._async_current_entries()
         ):
             return self.async_abort(reason="already_configured")
@@ -156,7 +161,10 @@ class ContactEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_CONTRACT_ID: contract.contract_id,
             CONF_CONTRACT_ICP: contract.icp,
         }
-        return self.async_create_entry(title="Contact Energy electricity", data=data)
+        return self.async_create_entry(
+            title=contract_entry_title(contract.icp),
+            data=data,
+        )
 
     async def async_step_reauth(
         self, entry_data: Mapping[str, Any]

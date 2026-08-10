@@ -53,11 +53,13 @@ class ContactEnergyStatistics:
         hass: HomeAssistant,
         entry_id: str,
         contract_key: str,
+        icp: str,
         store: StatisticsStore | None = None,
     ) -> None:
         """Initialize the accumulator."""
         self._hass = hass
         self._contract_key = contract_key
+        self._icp = icp
         self._store = store or Store(
             hass,
             STORAGE_VERSION,
@@ -203,10 +205,7 @@ class ContactEnergyStatistics:
                 StatisticMetaData(
                     mean_type=StatisticMeanType.NONE,
                     has_sum=True,
-                    name=(
-                        "Contact Energy electricity consumption "
-                        f"({self._contract_key[:8]})"
-                    ),
+                    name=(f"Contact Energy electricity consumption (ICP {self._icp})"),
                     source=DOMAIN,
                     statistic_id=self.energy_statistic_id,
                     unit_class="energy",
@@ -220,7 +219,7 @@ class ContactEnergyStatistics:
                 StatisticMetaData(
                     mean_type=StatisticMeanType.NONE,
                     has_sum=True,
-                    name=f"Contact Energy electricity cost ({self._contract_key[:8]})",
+                    name=f"Contact Energy electricity cost (ICP {self._icp})",
                     source=DOMAIN,
                     statistic_id=self.cost_statistic_id,
                     unit_class=None,
