@@ -1,7 +1,5 @@
 """Tests for deterministic release assembly."""
 
-from __future__ import annotations
-
 import hashlib
 from pathlib import Path
 from zipfile import ZipFile

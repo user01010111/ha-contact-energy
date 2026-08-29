@@ -1,7 +1,5 @@
 """Tests for config-entry setup and unload lifecycle."""
 
-from __future__ import annotations
-
 import asyncio
 from unittest.mock import AsyncMock, patch
 
@@ -59,6 +57,10 @@ async def test_one_client_runtime_and_clean_unload(hass, mock_config_entry) -> N
     mock_config_entry.add_to_hass(hass)
     with (
         patch(
+            "custom_components.contact_energy.ContactEnergyApi",
+            autospec=True,
+        ) as api_class,
+        patch(
             "custom_components.contact_energy.ContactEnergyCoordinator."
             "async_config_entry_first_refresh",
             AsyncMock(),
@@ -79,10 +81,10 @@ async def test_one_client_runtime_and_clean_unload(hass, mock_config_entry) -> N
         ) as unload,
     ):
         assert await async_setup_entry(hass, mock_config_entry)
-        runtime = mock_config_entry.runtime_data
-        assert runtime.coordinator.api is runtime.client
+        assert mock_config_entry.runtime_data.coordinator.api is api_class.return_value
         assert await async_unload_entry(hass, mock_config_entry)
 
+    api_class.assert_called_once()
     forward.assert_awaited_once()
     refresh.assert_awaited_once()
     unload.assert_awaited_once()

@@ -1,7 +1,5 @@
 """Tests for coordinator error mapping and reporting gaps."""
 
-from __future__ import annotations
-
 from datetime import timedelta
 from unittest.mock import AsyncMock
 

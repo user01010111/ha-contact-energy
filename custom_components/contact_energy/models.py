@@ -1,12 +1,9 @@
 """Validated data models for Contact Energy responses."""
 
-from __future__ import annotations
-
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -225,8 +222,8 @@ def _optional_number(value: Any, *, allow_negative: bool = True) -> float | None
     if value is None or isinstance(value, bool):
         return None
     try:
-        number = float(Decimal(str(value)))
-    except InvalidOperation, TypeError, ValueError:
+        number = float(value)
+    except TypeError, ValueError:
         return None
     if not math.isfinite(number) or (not allow_negative and number < 0):
         return None

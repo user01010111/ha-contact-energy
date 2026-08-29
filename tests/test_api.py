@@ -1,7 +1,5 @@
 """Tests for Contact Energy API failure and retry boundaries."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from collections import deque

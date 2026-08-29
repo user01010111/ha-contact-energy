@@ -1,7 +1,5 @@
 """The Contact Energy integration."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
@@ -33,7 +31,6 @@ PLATFORMS: list[Platform] = [Platform.SENSOR]
 class ContactEnergyRuntimeData:
     """Runtime objects shared by this config entry."""
 
-    client: ContactEnergyApi
     coordinator: ContactEnergyCoordinator
     contract_key: str
 
@@ -62,7 +59,6 @@ async def async_setup_entry(
     )
     coordinator = ContactEnergyCoordinator(hass, entry, client, statistics)
     entry.runtime_data = ContactEnergyRuntimeData(
-        client=client,
         coordinator=coordinator,
         contract_key=contract_key,
     )
