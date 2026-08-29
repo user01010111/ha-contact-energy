@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Reject likely committed credentials while allowing documented fixtures."""
 
-from __future__ import annotations
-
 import re
 import subprocess
 from pathlib import Path

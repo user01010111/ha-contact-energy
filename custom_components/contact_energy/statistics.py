@@ -1,7 +1,5 @@
 """Stable external-statistics accumulation for Contact Energy usage."""
 
-from __future__ import annotations
-
 import logging
 import math
 from dataclasses import dataclass
@@ -153,7 +151,6 @@ class ContactEnergyStatistics:
             _LOGGER.debug("Ignoring usage costs from an inconsistent currency batch")
 
         for point in points:
-            _validate_usage_point(point)
             timestamp = dt_util.as_utc(point.start).isoformat()
             old = self._points.get(timestamp)
             old_cost = old.get("cost") if old is not None else None

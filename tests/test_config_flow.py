@@ -1,7 +1,5 @@
 """Tests for setup, contract selection, and reauthentication flows."""
 
-from __future__ import annotations
-
 from unittest.mock import AsyncMock, patch
 
 import pytest

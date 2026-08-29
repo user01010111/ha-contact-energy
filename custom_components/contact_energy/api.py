@@ -1,7 +1,5 @@
 """Asynchronous client for Contact Energy's customer API."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import math
@@ -55,16 +53,6 @@ class ContactEnergyApi:
         self._login_lock = asyncio.Lock()
         self._login_task: asyncio.Task[None] | None = None
         self._login_failure_until = 0.0
-
-    @property
-    def account_id(self) -> str | None:
-        """Return the configured account identifier."""
-        return self._account_id
-
-    @property
-    def contract_id(self) -> str | None:
-        """Return the configured contract identifier."""
-        return self._contract_id
 
     def _headers(self, *, include_session: bool) -> dict[str, str]:
         """Build request headers without exposing them to logging."""

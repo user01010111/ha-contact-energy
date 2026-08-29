@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Build and validate the deterministic HACS release archive."""
 
-from __future__ import annotations
-
 import argparse
 import hashlib
 import json

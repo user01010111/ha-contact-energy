@@ -1,7 +1,5 @@
 """Tests for contract-scoped entity identity and privacy."""
 
-from __future__ import annotations
-
 from unittest.mock import MagicMock
 
 from homeassistant.components.sensor import SensorDeviceClass

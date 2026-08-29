@@ -1,7 +1,5 @@
 """Shared fixtures for Contact Energy tests."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest
