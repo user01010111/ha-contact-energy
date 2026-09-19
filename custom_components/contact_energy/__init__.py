@@ -25,6 +25,11 @@ from .coordinator import ContactEnergyCoordinator
 from .statistics import ContactEnergyStatistics
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
+MIGRATION_HELP = (
+    "No migration changes were made. Review duplicate entries before reloading: "
+    "https://github.com/user01010111/ha-contact-energy/blob/main/"
+    "MIGRATION.md#duplicate-entries-block-setup"
+)
 
 
 @dataclass(slots=True)
@@ -123,7 +128,8 @@ def _migrate_legacy_registry(
             and legacy_entity_id != target_entity_id
         ):
             raise ConfigEntryError(
-                "Contact Energy registry migration found a duplicate entity"
+                "Contact Energy registry migration found a duplicate entity. "
+                f"{MIGRATION_HELP}"
             )
         if legacy_entity_id is not None:
             entity_updates.append((legacy_entity_id, target_unique_id))
@@ -143,14 +149,16 @@ def _migrate_legacy_registry(
         and legacy_device.id != target_device.id
     ):
         raise ConfigEntryError(
-            "Contact Energy registry migration found a duplicate device"
+            "Contact Energy registry migration found a duplicate device. "
+            f"{MIGRATION_HELP}"
         )
     if any(
         other.entry_id != entry.entry_id and other.unique_id == digest
         for other in hass.config_entries.async_entries(DOMAIN)
     ):
         raise ConfigEntryError(
-            "Contact Energy registry migration found a duplicate config entry"
+            "Contact Energy registry migration found a duplicate config entry. "
+            f"{MIGRATION_HELP}"
         )
 
     hass.config_entries.async_update_entry(

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import Platform
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
     ConfigEntryError,
@@ -22,11 +22,13 @@ from custom_components.contact_energy import (
     async_unload_entry,
 )
 from custom_components.contact_energy.const import (
+    CONF_ACCOUNT_ID,
     CONF_CONTRACT_ICP,
     CONF_CONTRACT_ID,
     DOMAIN,
     SENSOR_USAGE,
     contract_device_name,
+    contract_digest,
     contract_entry_title,
 )
 
@@ -207,8 +209,9 @@ async def test_setup_migrates_legacy_registry_identifiers(
     assert mock_config_entry.unique_id != mock_config_entry.data["contract_id"]
 
 
-def test_registry_migration_preflights_entity_collision(
-    hass, mock_config_entry
+@pytest.mark.parametrize("collision_kind", ["entity", "device", "config entry"])
+def test_registry_migration_preflights_collision_with_recovery_guidance(
+    hass, mock_config_entry, collision_kind
 ) -> None:
     mock_config_entry.add_to_hass(hass)
     icp = mock_config_entry.data[CONF_CONTRACT_ICP]
@@ -225,19 +228,56 @@ def test_registry_migration_preflights_entity_collision(
         f"{DOMAIN}_{icp}_{SENSOR_USAGE}",
         config_entry=mock_config_entry,
     )
-    registry.async_get_or_create(
-        Platform.SENSOR,
-        DOMAIN,
-        f"{contract_key}_{SENSOR_USAGE}",
-        config_entry=mock_config_entry,
+    devices = dr.async_get(hass)
+    legacy_device = devices.async_get_or_create(
+        config_entry_id=mock_config_entry.entry_id,
+        identifiers={(DOMAIN, icp)},
     )
+    if collision_kind == "entity":
+        registry.async_get_or_create(
+            Platform.SENSOR,
+            DOMAIN,
+            f"{contract_key}_{SENSOR_USAGE}",
+            config_entry=mock_config_entry,
+        )
+    elif collision_kind == "device":
+        devices.async_get_or_create(
+            config_entry_id=mock_config_entry.entry_id,
+            identifiers={(DOMAIN, contract_key)},
+        )
+    else:
+        duplicate = MockConfigEntry(
+            domain=DOMAIN,
+            data=mock_config_entry.data,
+            unique_id=contract_digest(
+                mock_config_entry.data[CONF_ACCOUNT_ID],
+                mock_config_entry.data[CONF_CONTRACT_ID],
+                icp,
+            ),
+        )
+        duplicate.add_to_hass(hass)
 
-    with pytest.raises(ConfigEntryError):
+    with pytest.raises(ConfigEntryError, match=f"duplicate {collision_kind}") as err:
         _migrate_legacy_registry(hass, mock_config_entry, contract_key)
 
+    message = str(err.value)
+    assert "No migration changes were made" in message
+    assert (
+        "https://github.com/user01010111/ha-contact-energy/blob/main/"
+        "MIGRATION.md#duplicate-entries-block-setup"
+    ) in message
+    for key in (
+        CONF_EMAIL,
+        CONF_PASSWORD,
+        CONF_ACCOUNT_ID,
+        CONF_CONTRACT_ID,
+        CONF_CONTRACT_ICP,
+    ):
+        assert mock_config_entry.data[key] not in message
     assert registry.async_get(legacy.entity_id).unique_id == (
         f"{DOMAIN}_{icp}_{SENSOR_USAGE}"
     )
+    assert devices.async_get(legacy_device.id).identifiers == {(DOMAIN, icp)}
     assert mock_config_entry.unique_id == mock_config_entry.data[CONF_CONTRACT_ID]
     assert mock_config_entry.title == "Legacy title"
 
