@@ -69,13 +69,13 @@ Account balance and billing values belong to the customer account. If several el
 
 ## Upgrading from v1.0.0
 
-If usage appears frozen after upgrading, check the [upgrade troubleshooting guide](MIGRATION.md#usage-appears-frozen-after-upgrading) before deleting entities or history. The Energy dashboard may still be displaying the old statistics even when v2 is importing data.
+Back up Home Assistant before upgrading. V2 preserves the existing integration entry and entity IDs, but creates separate consumption and cost statistics for each electricity contract.
 
-The v2 migration reuses the existing integration entry and preserves entity IDs. It replaces raw account, contract, and ICP registry identifiers with opaque contract-scoped identifiers while retaining the ICP in authenticated device and statistic display names.
+In the Energy dashboard, select the new statistics for the correct ICP. The old series remain available but no longer receive updates. Remove the old free-electricity selection; v2 does not provide it.
 
-v1 created global, moving-window statistics that could collide across contracts. v2 does not rewrite those recorder rows because their contract ownership and lifetime meaning cannot be established safely. It leaves them untouched and starts new contract-scoped energy and cost series. After upgrading, open the Energy dashboard configuration and select the new Contact Energy consumption and cost statistics. The old free-electricity statistic is discontinued because `offpeakValue` is not authoritative evidence of free usage.
+See the [migration guide](MIGRATION.md) for upgrade and rollback instructions, [usage that appears frozen](MIGRATION.md#usage-appears-frozen-after-upgrading), and [duplicate entries blocking setup](MIGRATION.md#duplicate-entries-block-setup).
 
-See [MIGRATION.md](MIGRATION.md) for the upgrade checklist and rollback notes.
+Warnings about billing sensors losing their state class are explained [here](MIGRATION.md#billing-sensors-no-longer-have-a-state-class). Deleting their old statistics is optional.
 
 ## Statistics behavior
 
@@ -90,13 +90,6 @@ Costs are recorded in NZD. A missing cost value does not erase a previously impo
 - Only electricity contracts are supported in v2.0.0.
 - If setup reports that Contact Energy is unavailable, confirm that MyAccount is working before retrying. Avoid repeated login attempts when the Contact service is degraded.
 - If saved credentials are rejected later, use the Reconfigure action shown by Home Assistant and enter the current credentials once.
-- After upgrading from v1, select the new contract-scoped consumption and cost statistics in the Energy dashboard. The legacy series are deliberately left untouched.
-
-### Upgraded but usage appears frozen?
-
-First check Contact Energy under Settings → Devices & services. If the integration loaded successfully, check that the Energy dashboard uses the new consumption and cost statistics for the correct ICP, rather than the retained v1 series. If setup reports a duplicate entity, device, or config entry, follow the [duplicate-entry recovery guidance](MIGRATION.md#duplicate-entries-block-setup).
-
-Renaming or recreating entity IDs does not select the new Energy statistics. Do not purge recorder history or regenerate all entity IDs as a routine fix; existing dashboards and automations may depend on them. See the [upgrade troubleshooting steps](MIGRATION.md#usage-appears-frozen-after-upgrading) to distinguish a stale dashboard selection from an integration that has stopped updating.
 
 ## Authentication and API identifier
 
