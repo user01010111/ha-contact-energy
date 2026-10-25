@@ -54,6 +54,25 @@ Before removing anything:
 
 If ownership is unclear or Home Assistant does not offer removal, stop and [open a support issue](https://github.com/user01010111/ha-contact-energy/issues) rather than editing `.storage`. Include the previous integration/fork and upgrade steps, plus the duplicate-error text. Remove credentials, addresses, ICPs, account/contract IDs, tokens, headers, and complete usage URLs from logs or screenshots. Do not upload configuration storage or database files.
 
+## Billing sensors no longer have a state class
+
+After upgrading, Home Assistant may show “The entity no longer has a state class” for:
+
+- Account balance
+- Next bill amount
+- Payment due
+
+The old integration generated long-term statistics for these sensors. V2 no longer does, but Home Assistant still holds their earlier statistics and flags the change. This warning does not prevent the sensors from updating.
+
+You can choose:
+
+- **Close** to keep the existing statistics.
+- **Delete** to permanently remove that billing sensor’s stored statistics. Back up first if you might want them later.
+
+Deleting these statistics does not delete the sensor or the separate electricity consumption and cost statistics used by the Energy dashboard. It is optional—not a required upgrade step.
+
+Do not recreate entity IDs or add a state class just to clear this warning.
+
 ## Rollback
 
 Stop Home Assistant, restore the pre-upgrade configuration and recorder backups together, restore the previous integration directory, and then start Home Assistant. Restoring only one of configuration, recorder, or integration code can leave the three out of sync.
