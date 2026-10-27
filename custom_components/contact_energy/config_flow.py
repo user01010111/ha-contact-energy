@@ -22,6 +22,7 @@ from .const import (
     CONF_ACCOUNT_ID,
     CONF_CONTRACT_ICP,
     CONF_CONTRACT_ID,
+    CONF_CONTRACT_TYPE,
     CONF_USAGE_DAYS,
     DEFAULT_USAGE_DAYS,
     DOMAIN,
@@ -59,7 +60,7 @@ def _user_schema(suggested: Mapping[str, Any] | None = None) -> vol.Schema:
 async def validate_input(
     hass: HomeAssistant, data: Mapping[str, Any]
 ) -> list[Contract]:
-    """Validate credentials and return selectable electricity contracts."""
+    """Validate credentials and return selectable energy contracts."""
     api = ContactEnergyApi(hass, data[CONF_EMAIL], data[CONF_PASSWORD])
     await api.async_login()
     return parse_contracts(await api.async_get_accounts())
@@ -109,7 +110,7 @@ class ContactEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_contract(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Select one validated electricity contract."""
+        """Select one validated energy contract."""
         errors: dict[str, str] = {}
         if user_input is not None:
             selected = next(
@@ -126,7 +127,8 @@ class ContactEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         contract_labels = {
             contract.contract_id: (
-                f"Electricity contract {index}: {contract.address} (ICP {contract.icp})"
+                f"{'Gas' if contract.contract_type == 2 else 'Electricity'} "
+                f"contract {index}: {contract.address} (ICP {contract.icp})"
             )
             for index, contract in enumerate(self._contracts, start=1)
         }
@@ -159,8 +161,10 @@ class ContactEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_CONTRACT_ID: contract.contract_id,
             CONF_CONTRACT_ICP: contract.icp,
         }
+        if contract.contract_type == 2:
+            data[CONF_CONTRACT_TYPE] = 2
         return self.async_create_entry(
-            title=contract_entry_title(contract.icp),
+            title=contract_entry_title(contract.icp, contract.contract_type),
             data=data,
         )
 

@@ -14,6 +14,7 @@ from .const import (
     CONF_ACCOUNT_ID,
     CONF_CONTRACT_ICP,
     CONF_CONTRACT_ID,
+    CONF_CONTRACT_TYPE,
     CONTRACT_KEY_LENGTH,
     DOMAIN,
     SENSOR_KEYS,
@@ -56,11 +57,15 @@ async def async_setup_entry(
         entry.data[CONF_ACCOUNT_ID],
         entry.data[CONF_CONTRACT_ID],
     )
-    statistics = ContactEnergyStatistics(
-        hass,
-        entry.entry_id,
-        contract_key,
-        str(entry.data[CONF_CONTRACT_ICP]),
+    statistics = (
+        None
+        if entry.data.get(CONF_CONTRACT_TYPE, 1) == 2
+        else ContactEnergyStatistics(
+            hass,
+            entry.entry_id,
+            contract_key,
+            str(entry.data[CONF_CONTRACT_ICP]),
+        )
     )
     coordinator = ContactEnergyCoordinator(hass, entry, client, statistics)
     entry.runtime_data = ContactEnergyRuntimeData(
@@ -69,13 +74,14 @@ async def async_setup_entry(
     )
 
     await coordinator.async_config_entry_first_refresh()
-    coordinator.enable_history_fetches()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_create_background_task(
-        hass,
-        coordinator.async_refresh(),
-        "Contact Energy history backfill",
-    )
+    if statistics is not None:
+        coordinator.enable_history_fetches()
+        entry.async_create_background_task(
+            hass,
+            coordinator.async_refresh(),
+            "Contact Energy history backfill",
+        )
     return True
 
 
@@ -164,7 +170,7 @@ def _migrate_legacy_registry(
     hass.config_entries.async_update_entry(
         entry,
         unique_id=digest,
-        title=contract_entry_title(icp),
+        title=contract_entry_title(icp, entry.data.get(CONF_CONTRACT_TYPE, 1)),
     )
     for entity_id, target_unique_id in entity_updates:
         entity_registry.async_update_entity(
@@ -175,10 +181,10 @@ def _migrate_legacy_registry(
         device_registry.async_update_device(
             legacy_device.id,
             new_identifiers={(DOMAIN, contract_key)},
-            name=contract_device_name(icp),
+            name=contract_device_name(icp, entry.data.get(CONF_CONTRACT_TYPE, 1)),
         )
     elif target_device is not None:
         device_registry.async_update_device(
             target_device.id,
-            name=contract_device_name(icp),
+            name=contract_device_name(icp, entry.data.get(CONF_CONTRACT_TYPE, 1)),
         )

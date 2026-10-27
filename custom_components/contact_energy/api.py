@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import urlencode
 
 import aiohttp
 from homeassistant.core import HomeAssistant
@@ -50,6 +51,7 @@ class ContactEnergyApi:
         self._session = async_get_clientsession(hass)
         self._hass = hass
         self._api_token: str | None = None
+        self._business_partner_id: str | None = None
         self._login_lock = asyncio.Lock()
         self._login_task: asyncio.Task[None] | None = None
         self._login_failure_until = 0.0
@@ -159,6 +161,10 @@ class ContactEnergyApi:
         if not isinstance(token, str) or not token.strip():
             raise MalformedResponse("Login response did not contain a token")
         self._api_token = token
+        partner = result.get("bp")
+        self._business_partner_id = (
+            partner if isinstance(partner, str) and partner else None
+        )
 
     async def _async_authenticated_request(
         self,
@@ -223,6 +229,39 @@ class ContactEnergyApi:
             isinstance(point, dict) for point in result
         ):
             raise MalformedResponse("Unexpected usage response")
+        return result
+
+    async def async_get_bill_transactions(self, start: str, end: str) -> dict[str, Any]:
+        """Read a bounded invoice index; never expose payment history as entities."""
+        if not self._account_id:
+            raise MalformedResponse("Bill request is missing account selection")
+        query = urlencode(
+            {"account": self._account_id, "fromDate": start, "toDate": end}
+        )
+        result = await self._async_authenticated_request(
+            "GET", f"{API_BASE_URL}/transactions/v2?{query}", "bill_index"
+        )
+        if not isinstance(result, dict):
+            raise MalformedResponse("Unexpected bill index response")
+        return result
+
+    async def async_get_bill(self, invoice_id: str) -> dict[str, Any]:
+        """Read the interactive bill, whose identity the caller must verify."""
+        await self.async_login()
+        if not self._account_id or not self._business_partner_id or not invoice_id:
+            raise MalformedResponse("Bill request is missing account selection")
+        query = urlencode(
+            {
+                "ba": self._account_id,
+                "bp": self._business_partner_id,
+                "invoiceId": invoice_id,
+            }
+        )
+        result = await self._async_authenticated_request(
+            "GET", f"{API_BASE_URL}/interactive-bill?{query}", "bill"
+        )
+        if not isinstance(result, dict):
+            raise MalformedResponse("Unexpected bill response")
         return result
 
 

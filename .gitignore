@@ -9,6 +9,7 @@ __pycache__
 
 
 # misc
+.codex-review/
 .coverage
 .DS_Store
 .vscode

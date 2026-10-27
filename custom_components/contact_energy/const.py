@@ -10,6 +10,7 @@ DOMAIN_NAME: Final = "Contact Energy"
 CONF_ACCOUNT_ID: Final = "account_id"
 CONF_CONTRACT_ID: Final = "contract_id"
 CONF_CONTRACT_ICP: Final = "contract_icp"
+CONF_CONTRACT_TYPE: Final = "contract_type"
 CONF_USAGE_DAYS: Final = "usage_days"
 
 DEFAULT_USAGE_DAYS: Final = 10
@@ -49,7 +50,7 @@ def contract_digest(account_id: object, contract_id: object, icp: object) -> str
     return hashlib.sha256(identity.encode()).hexdigest()
 
 
-def contract_entry_title(icp: object) -> str:
+def contract_entry_title(icp: object, contract_type: int = 1) -> str:
     """Return an entry title that distinguishes contracts without logging a full ICP."""
     value = str(icp)
     visible = (
@@ -57,9 +58,11 @@ def contract_entry_title(icp: object) -> str:
         if len(value) <= ICP_TITLE_SUFFIX_LENGTH
         else f"…{value[-ICP_TITLE_SUFFIX_LENGTH:]}"
     )
-    return f"{DOMAIN_NAME} electricity (ICP {visible})"
+    fuel = "gas" if contract_type == 2 else "electricity"
+    return f"{DOMAIN_NAME} {fuel} (ICP {visible})"
 
 
-def contract_device_name(icp: object) -> str:
+def contract_device_name(icp: object, contract_type: int = 1) -> str:
     """Return the authenticated Home Assistant display name for a contract."""
-    return f"{DOMAIN_NAME} electricity (ICP {icp})"
+    fuel = "gas" if contract_type == 2 else "electricity"
+    return f"{DOMAIN_NAME} {fuel} (ICP {icp})"

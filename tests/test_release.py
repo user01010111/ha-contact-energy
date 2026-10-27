@@ -17,8 +17,8 @@ def test_release_archive_is_exact_and_reproducible(tmp_path: Path) -> None:
     first = tmp_path / "first" / "contact_energy.zip"
     second = tmp_path / "second" / "contact_energy.zip"
 
-    first_checksum = build_archive(first, "2.0.0")
-    second_checksum = build_archive(second, "2.0.0")
+    first_checksum = build_archive(first, "2.1.0")
+    second_checksum = build_archive(second, "2.1.0")
 
     assert first.read_bytes() == second.read_bytes()
     digest = hashlib.sha256(first.read_bytes()).hexdigest()
@@ -27,6 +27,8 @@ def test_release_archive_is_exact_and_reproducible(tmp_path: Path) -> None:
 
     with ZipFile(first) as archive:
         assert archive.namelist() == sorted(ARCHIVE_SOURCES)
+        assert "periods.py" in archive.namelist()
+        assert "billing.py" in archive.namelist()
         assert all(info.date_time == FIXED_TIMESTAMP for info in archive.infolist())
         assert archive.testzip() is None
 

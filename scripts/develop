@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Expose the repository's custom integrations to the development instance.
-export PYTHONPATH="${PWD}/custom_components${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH="${PWD}${PYTHONPATH:+:${PYTHONPATH}}"
 
 # Start Home Assistant
 hass --config "${PWD}/config" --debug

@@ -2,8 +2,8 @@
 
 import logging
 import math
-from dataclasses import dataclass
-from datetime import timedelta
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 from homeassistant.components.recorder.models import (
@@ -20,8 +20,10 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, MAX_USAGE_DAYS, STORAGE_KEY_PREFIX, STORAGE_VERSION
 from .models import CONTACT_TIME_ZONE, UsagePoint
+from .periods import PeriodSummary, summarise_periods
 
 _LOGGER = logging.getLogger(__name__)
+SUMMARY_RETENTION_DAYS = 93
 
 
 class StatisticsStore(Protocol):
@@ -41,6 +43,8 @@ class StatisticsResult:
     energy: float
     cost: float
     currency: str | None
+    latest_usage: datetime | None = None
+    periods: dict[str, PeriodSummary] = field(default_factory=dict)
 
 
 class ContactEnergyStatistics:
@@ -68,6 +72,8 @@ class ContactEnergyStatistics:
         self._archive_cost = 0.0
         self._currency: str | None = None
         self._points: dict[str, dict[str, float | None]] = {}
+        self._summary_points: dict[str, dict[str, float | None]] = {}
+        self._latest_usage: datetime | None = None
 
     @property
     def energy_statistic_id(self) -> str:
@@ -103,9 +109,24 @@ class ContactEnergyStatistics:
         if self._archive_cost and self._currency is None:
             raise StatisticsStateError("Contact Energy statistics currency is missing")
 
-        raw_points = stored.get("points")
+        self._points = self._load_points(stored.get("points"))
+        # Older stores have only the correction window; never infer archived hours.
+        self._summary_points = self._load_points(
+            stored.get("summary_points", stored.get("points"))
+        )
+        latest = stored.get("latest_usage")
+        if latest is not None:
+            parsed = dt_util.parse_datetime(latest) if isinstance(latest, str) else None
+            if not _valid_hour_start(parsed):
+                raise StatisticsStateError("Contact Energy latest usage is invalid")
+            self._latest_usage = dt_util.as_utc(parsed)
+        self._loaded = True
+
+    def _load_points(self, raw_points: Any) -> dict[str, dict[str, float | None]]:
+        """Validate a stored hourly window before exposing it to callers."""
         if not isinstance(raw_points, dict):
             raise StatisticsStateError("Contact Energy statistics points are invalid")
+        points: dict[str, dict[str, float | None]] = {}
         normalized_timestamps: set[str] = set()
         for timestamp, values in raw_points.items():
             if not isinstance(timestamp, str) or not isinstance(values, dict):
@@ -127,18 +148,26 @@ class ContactEnergyStatistics:
                 raise StatisticsStateError(
                     "Contact Energy statistics currency is missing"
                 )
-            self._points[normalized_timestamp] = {
+            points[normalized_timestamp] = {
                 "energy": energy,
                 "cost": cost,
             }
-        self._loaded = True
+        return points
 
     async def async_process(self, usage_points: list[UsagePoint]) -> StatisticsResult:
         """Merge corrections, replay retained sums, and persist lifetime state."""
         await self.async_load()
-        state_changed = False
 
-        points = _deduplicated_points(usage_points)
+        now = dt_util.utcnow()
+        contact_today = now.astimezone(CONTACT_TIME_ZONE).date()
+        oldest_refetched_date = contact_today - timedelta(days=MAX_USAGE_DAYS)
+        # Older inputs may already be in the archive and cannot be corrected safely.
+        points = [
+            point
+            for point in _deduplicated_points(usage_points)
+            if point.start.astimezone(CONTACT_TIME_ZONE).date() >= oldest_refetched_date
+            and point.start <= now
+        ]
         batch_currencies = {
             point.currency
             for point in points
@@ -146,7 +175,6 @@ class ContactEnergyStatistics:
         }
         if self._currency is None and len(batch_currencies) == 1:
             self._currency = batch_currencies.pop()
-            state_changed = True
         elif self._currency is None and len(batch_currencies) > 1:
             _LOGGER.debug("Ignoring usage costs from an inconsistent currency batch")
 
@@ -164,7 +192,20 @@ class ContactEnergyStatistics:
             if old == new:
                 continue
             self._points[timestamp] = new
-            state_changed = True
+
+        # Summaries retain observed hours only, independently of the lifetime archive.
+        self._summary_points.update(self._points)
+        if self._summary_points:
+            newest = dt_util.parse_datetime(max(self._summary_points))
+            if self._latest_usage is None or newest > self._latest_usage:
+                self._latest_usage = newest
+        summary_cutoff = contact_today - timedelta(days=SUMMARY_RETENTION_DAYS)
+        self._summary_points = {
+            timestamp: values
+            for timestamp, values in self._summary_points.items()
+            if dt_util.parse_datetime(timestamp).astimezone(CONTACT_TIME_ZONE).date()
+            >= summary_cutoff
+        }
 
         energy_total = self._archive_energy
         cost_total = self._archive_cost
@@ -182,8 +223,6 @@ class ContactEnergyStatistics:
             if self._currency:
                 cost_rows.append(StatisticData(start=start, sum=cost_total))
 
-        contact_today = dt_util.utcnow().astimezone(CONTACT_TIME_ZONE).date()
-        oldest_refetched_date = contact_today - timedelta(days=MAX_USAGE_DAYS)
         for timestamp in sorted(self._points):
             parsed = dt_util.parse_datetime(timestamp)
             if (
@@ -194,7 +233,6 @@ class ContactEnergyStatistics:
             archived = self._points.pop(timestamp)
             self._archive_energy += float(archived["energy"] or 0.0)
             self._archive_cost += float(archived["cost"] or 0.0)
-            state_changed = True
 
         if energy_rows:
             async_add_external_statistics(
@@ -225,20 +263,38 @@ class ContactEnergyStatistics:
                 cost_rows,
             )
 
-        if state_changed:
-            await self._store.async_save(
-                {
-                    "archive_energy": self._archive_energy,
-                    "archive_cost": self._archive_cost,
-                    "currency": self._currency,
-                    "points": self._points,
-                }
-            )
+        # Store logs some write failures without raising. Retry each refresh,
+        # including unchanged data, so a recovered store receives the current state.
+        await self._store.async_save(
+            {
+                "archive_energy": self._archive_energy,
+                "archive_cost": self._archive_cost,
+                "currency": self._currency,
+                "points": self._points,
+                "summary_points": self._summary_points,
+                "latest_usage": (
+                    self._latest_usage.isoformat() if self._latest_usage else None
+                ),
+            }
+        )
 
         return StatisticsResult(
             energy=energy_total,
             cost=cost_total,
             currency=self._currency,
+            latest_usage=self._latest_usage,
+            periods=summarise_periods(
+                [
+                    UsagePoint(
+                        start=dt_util.parse_datetime(timestamp),
+                        energy=values["energy"],
+                        cost=values["cost"],
+                        currency=self._currency,
+                    )
+                    for timestamp, values in self._summary_points.items()
+                ],
+                contact_today,
+            ),
         )
 
 
@@ -264,7 +320,12 @@ def _stored_optional_nonnegative_number(value: Any, label: str) -> float | None:
         return None
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise StatisticsStateError(f"Contact Energy statistics {label} is invalid")
-    parsed = float(value)
+    try:
+        parsed = float(value)
+    except OverflowError as err:
+        raise StatisticsStateError(
+            f"Contact Energy statistics {label} is invalid"
+        ) from err
     if not math.isfinite(parsed) or parsed < 0:
         raise StatisticsStateError(f"Contact Energy statistics {label} is invalid")
     return parsed
