@@ -1,22 +1,22 @@
 {
   "config": {
     "abort": {
-      "already_configured": "This electricity contract is already configured.",
+      "already_configured": "This energy contract is already configured.",
       "reauth_successful": "Reauthentication was successful."
     },
     "error": {
       "cannot_connect": "Contact Energy is temporarily unavailable. Try again later.",
       "invalid_auth": "The email address or password was rejected.",
-      "invalid_contract": "The configured electricity contract was not available for this account.",
+      "invalid_contract": "The configured energy contract was not available for this account.",
       "unknown": "Contact Energy returned an unexpected response."
     },
     "step": {
       "contract": {
         "data": {
-          "contract_id": "Electricity contract"
+          "contract_id": "Energy contract"
         },
-        "description": "Choose the electricity contract to monitor.",
-        "title": "Select an electricity contract"
+        "description": "Choose the electricity or piped-gas contract to monitor.",
+        "title": "Select an energy contract"
       },
       "reauth_confirm": {
         "data": {
@@ -32,7 +32,7 @@
           "password": "Password",
           "usage_days": "Usage history days"
         },
-        "description": "Enter Contact Energy credentials. The history range is limited to 3–31 days to avoid excessive API requests.",
+        "description": "Enter Contact Energy credentials. Electricity history is limited to 3–31 days. Gas shows the latest bill and does not use this history setting.",
         "title": "Connect to Contact Energy"
       }
     }

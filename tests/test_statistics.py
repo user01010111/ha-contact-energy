@@ -5,9 +5,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from homeassistant.util import dt as dt_util
+from homeassistant.util.file import WriteError
 
-from custom_components.contact_energy.models import UsagePoint
+from custom_components.contact_energy.models import CONTACT_TIME_ZONE, UsagePoint
 from custom_components.contact_energy.statistics import (
+    SUMMARY_RETENTION_DAYS,
     ContactEnergyStatistics,
     StatisticsStateError,
 )
@@ -284,3 +286,216 @@ def test_multiple_contracts_have_unique_statistic_ids(hass) -> None:
     assert first.cost_statistic_id != second.cost_statistic_id
     assert "icp-a" not in first.energy_statistic_id
     assert "icp-b" not in second.cost_statistic_id
+
+
+async def test_archived_inputs_cannot_reenter_correction_window(
+    hass, monkeypatch
+) -> None:
+    imported = []
+    monkeypatch.setattr(
+        "custom_components.contact_energy.statistics.async_add_external_statistics",
+        lambda _hass, metadata, rows: imported.append((metadata, list(rows))),
+    )
+    current = datetime(2026, 8, 8, 18, tzinfo=UTC)
+    monkeypatch.setattr(dt_util, "utcnow", lambda: current)
+    store = FakeStore()
+    statistics = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP, store)
+    expiring = _point(datetime(2026, 7, 8, 12, tzinfo=UTC), 1.0, 0.25)
+    retained = _point(datetime(2026, 7, 9, 12, tzinfo=UTC), 2.0, 0.5)
+    assert (await statistics.async_process([expiring, retained])).energy == 3.0
+
+    current = datetime(2026, 8, 9, 18, tzinfo=UTC)
+    expired_correction = _point(expiring.start, 99.0, 99.0)
+    correction = _point(retained.start, 4.0, 1.0)
+    late = _point(retained.start + timedelta(hours=1), 3.0, 0.75)
+    imported.clear()
+    result = await statistics.async_process([expired_correction, correction, late])
+    assert result.energy == 8.0
+    assert result.cost == 2.0
+    assert store.data["archive_energy"] == 1.0
+    energy_rows = next(
+        rows
+        for metadata, rows in imported
+        if metadata["statistic_id"] == statistics.energy_statistic_id
+    )
+    assert [row["sum"] for row in energy_rows] == [1.0, 5.0, 8.0]
+
+    for accumulator in (
+        statistics,
+        ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP, store),
+    ):
+        imported.clear()
+        result = await accumulator.async_process([expiring, correction, late])
+        assert result.energy == 8.0
+        assert result.cost == 2.0
+        assert store.data["archive_energy"] == 1.0
+        assert all(
+            row["start"] != expiring.start
+            for _metadata, rows in imported
+            for row in rows
+        )
+
+
+@pytest.mark.parametrize("empty_refresh", [False, True])
+async def test_real_store_retries_failed_save_and_restores_totals(
+    hass, hass_storage, monkeypatch, caplog, empty_refresh
+) -> None:
+    monkeypatch.setattr(
+        "custom_components.contact_energy.statistics.async_add_external_statistics",
+        lambda *_args: None,
+    )
+    statistics = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP)
+    store = statistics._store
+    write_data = store._async_write_data
+    attempts = 0
+
+    async def fail_once(data):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise WriteError("synthetic storage failure")
+        await write_data(data)
+
+    monkeypatch.setattr(store, "_async_write_data", fail_once)
+    now = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
+    point = _point(now - timedelta(hours=1), 1.0, 0.25)
+    assert (await statistics.async_process([point])).energy == 1.0
+    assert attempts == 1
+    assert store.key not in hass_storage
+    assert "synthetic storage failure" in caplog.text
+
+    result = await statistics.async_process([] if empty_refresh else [point])
+    assert result.energy == 1.0
+    assert attempts == 2
+    assert store.key in hass_storage
+
+    restarted = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP)
+    restored = await restarted.async_process([])
+    assert restored.energy == 1.0
+    assert restored.cost == 0.25
+
+
+async def test_period_history_survives_archival_corrections_and_restart(
+    hass, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "custom_components.contact_energy.statistics.async_add_external_statistics",
+        lambda *_args: None,
+    )
+    current = datetime(2026, 8, 1, tzinfo=CONTACT_TIME_ZONE)
+    monkeypatch.setattr(dt_util, "utcnow", lambda: current.astimezone(UTC))
+    store = FakeStore()
+    statistics = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP, store)
+    total = 0
+    for month in (7, 8, 9):
+        start = datetime(2026, month, 1, tzinfo=CONTACT_TIME_ZONE).astimezone(UTC)
+        current = datetime(2026, month + 1, 1, tzinfo=CONTACT_TIME_ZONE)
+        hours = int((current.astimezone(UTC) - start).total_seconds() / 3600)
+        points = [_point(start + timedelta(hours=i), 1, 0.25) for i in range(hours)]
+        result = await statistics.async_process(points)
+        total += hours
+        assert result.energy == total
+        assert result.periods["last_month"].energy == hours
+    assert store.data["archive_energy"] > 0
+    current = datetime(2026, 10, 6, tzinfo=CONTACT_TIME_ZONE)
+    restarted = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP, store)
+    result = await restarted.async_process([])
+    assert result.energy == total
+    assert result.periods["last_month"].energy == 719  # Spring DST transition.
+    assert result.periods["previous_month"].energy == 744
+    assert result.periods["last_month"].cost == 719 * 0.25
+    cutoff = current.date() - timedelta(days=SUMMARY_RETENTION_DAYS)
+    assert all(
+        datetime.fromisoformat(key).astimezone(CONTACT_TIME_ZONE).date() >= cutoff
+        for key in store.data["summary_points"]
+    )
+    assert len(store.data["points"]) < len(store.data["summary_points"])
+    # Expired corrections cannot alter summaries or lifetime sums.
+    old = _point(datetime(2026, 8, 1, tzinfo=CONTACT_TIME_ZONE), 99, 99)
+    unchanged = await restarted.async_process([old])
+    assert unchanged == result
+
+
+async def test_old_store_migration_does_not_invent_archived_months(
+    hass, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "custom_components.contact_energy.statistics.async_add_external_statistics",
+        lambda *_args: None,
+    )
+    current = datetime(2026, 10, 2, tzinfo=CONTACT_TIME_ZONE)
+    monkeypatch.setattr(dt_util, "utcnow", lambda: current.astimezone(UTC))
+    store = FakeStore()
+    start = datetime(2026, 10, 1, tzinfo=CONTACT_TIME_ZONE).astimezone(UTC)
+    store.data = {
+        "archive_energy": 50.0,
+        "archive_cost": 10.0,
+        "currency": "NZD",
+        "points": {
+            (start + timedelta(hours=i)).isoformat(): {"energy": 1.0, "cost": 0.25}
+            for i in range(24)
+        },
+    }
+    statistics = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP, store)
+    result = await statistics.async_process([])
+    assert result.energy == 74
+    assert result.cost == 16
+    assert result.periods["yesterday"].energy == 24
+    assert result.periods["last_month"].energy is None
+    assert result.latest_usage == start + timedelta(hours=23)
+
+    # Latest observation remains known after the summary window expires.
+    current += timedelta(days=100)
+    result = await statistics.async_process([])
+    assert store.data["summary_points"] == {}
+    assert result.latest_usage == start + timedelta(hours=23)
+    restarted = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP, store)
+    assert (await restarted.async_process([])) == result
+
+
+async def test_summary_cost_gaps_and_corrections_are_persistent(
+    hass, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "custom_components.contact_energy.statistics.async_add_external_statistics",
+        lambda *_args: None,
+    )
+    current = datetime(2026, 10, 2, tzinfo=CONTACT_TIME_ZONE)
+    monkeypatch.setattr(dt_util, "utcnow", lambda: current.astimezone(UTC))
+    store = FakeStore()
+    statistics = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP, store)
+    start = current.astimezone(UTC) - timedelta(days=1)
+    points = [_point(start + timedelta(hours=i), 1, 0.25) for i in range(24)]
+    points[0] = UsagePoint(start, 1, None, None)
+    result = await statistics.async_process(points)
+    assert result.periods["yesterday"].energy == 24
+    assert result.periods["yesterday"].cost is None
+    assert result.periods["yesterday"].cost_hours == 23
+    result = await statistics.async_process([_point(start, 2, 0.5)])
+    assert result.periods["yesterday"].energy == 25
+    assert result.periods["yesterday"].cost == 6.25
+    restarted = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP, store)
+    assert await restarted.async_process([]) == result
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"summary_points": []},
+        {"latest_usage": "invalid"},
+        {"latest_usage": 12},
+        {"archive_energy": 10**1000},
+    ],
+)
+async def test_invalid_summary_storage_is_rejected(hass, extra) -> None:
+    store = FakeStore()
+    store.data = {
+        "archive_energy": 0,
+        "archive_cost": 0,
+        "currency": None,
+        "points": {},
+        **extra,
+    }
+    statistics = ContactEnergyStatistics(hass, "entry", "contract", TEST_ICP, store)
+    with pytest.raises(StatisticsStateError):
+        await statistics.async_load()

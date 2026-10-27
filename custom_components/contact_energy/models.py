@@ -16,12 +16,13 @@ CONTACT_TIME_ZONE = ZoneInfo("Pacific/Auckland")
 
 @dataclass(frozen=True, slots=True)
 class Contract:
-    """A selectable electricity contract."""
+    """A selectable electricity or piped-gas contract."""
 
     contract_id: str
     account_id: str
     icp: str
     address: str
+    contract_type: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +36,7 @@ class AccountSnapshot:
     payment_due_date: date | None
     previous_reading_date: date | None
     next_reading_date: date | None
+    next_reading_is_estimate: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +50,7 @@ class UsagePoint:
 
 
 def parse_contracts(payload: Mapping[str, Any]) -> list[Contract]:
-    """Extract valid electricity contracts without retaining response objects."""
+    """Extract supported contracts without retaining response objects."""
     detail = payload.get("accountDetail")
     if not isinstance(detail, Mapping):
         raise MalformedResponse("Accounts response is missing account details")
@@ -62,7 +64,8 @@ def parse_contracts(payload: Mapping[str, Any]) -> list[Contract]:
     for raw_contract in raw_contracts:
         if not isinstance(raw_contract, Mapping):
             continue
-        if raw_contract.get("contractType") != 1:
+        kind = raw_contract.get("contractType")
+        if type(kind) is not int or kind not in (1, 2):
             continue
         try:
             contract_id = _required_identifier(raw_contract, "id")
@@ -75,11 +78,12 @@ def parse_contracts(payload: Mapping[str, Any]) -> list[Contract]:
                 account_id=account_id,
                 icp=icp,
                 address=_contract_address(raw_contract),
+                contract_type=kind,
             )
         )
 
     if not contracts:
-        raise MalformedResponse("No valid electricity contracts were returned")
+        raise MalformedResponse("No valid energy contracts were returned")
     return contracts
 
 
@@ -117,18 +121,33 @@ def parse_account_snapshot(
     previous_reading_date: date | None = None
     next_reading_date: date | None = None
     devices = selected_contract.get("devices")
-    if isinstance(devices, list) and devices and isinstance(devices[0], Mapping):
-        device = devices[0]
-        next_reading_date = _optional_date(device.get("nextMeterReadDate"))
-        registers = device.get("registers")
-        if (
-            isinstance(registers, list)
-            and registers
-            and isinstance(registers[0], Mapping)
+    next_reading_is_estimate = None
+    if (
+        isinstance(devices, list)
+        and devices
+        and all(isinstance(device, Mapping) for device in devices)
+    ):
+        # A contract-wide date must agree across all its meters/registers.
+        next_dates = {_optional_date(d.get("nextMeterReadDate")) for d in devices}
+        if len(next_dates) == 1:
+            next_reading_date = next_dates.pop()
+        estimates = [d.get("nextReadingIsEstimate") for d in devices]
+        if all(type(value) is bool for value in estimates) and len(set(estimates)) == 1:
+            next_reading_is_estimate = estimates[0]
+        registers = [d.get("registers") for d in devices]
+        if all(
+            isinstance(rows, list)
+            and rows
+            and all(isinstance(r, Mapping) for r in rows)
+            for rows in registers
         ):
-            previous_reading_date = _optional_date(
-                registers[0].get("previousMeterReadingDate")
-            )
+            previous_dates = {
+                _optional_date(r.get("previousMeterReadingDate"))
+                for rows in registers
+                for r in rows
+            }
+            if len(previous_dates) == 1:
+                previous_reading_date = previous_dates.pop()
 
     return AccountSnapshot(
         account_balance=account_balance,
@@ -138,6 +157,7 @@ def parse_account_snapshot(
         payment_due_date=payment_due_date,
         previous_reading_date=previous_reading_date,
         next_reading_date=next_reading_date,
+        next_reading_is_estimate=next_reading_is_estimate,
     )
 
 
@@ -168,7 +188,7 @@ def parse_usage_points(
                 start=start,
                 energy=energy,
                 cost=(
-                    _optional_number(raw_point.get("dollarValue"))
+                    _optional_number(raw_point.get("dollarValue"), allow_negative=False)
                     if currency is not None
                     else None
                 ),
@@ -199,13 +219,13 @@ def _contract_address(contract: Mapping[str, Any]) -> str:
     """Return an address label used only during interactive contract selection."""
     premise = contract.get("premise")
     if not isinstance(premise, Mapping):
-        return "Electricity contract"
+        return "Energy contract"
     supply_address = premise.get("supplyAddress")
     if not isinstance(supply_address, Mapping):
-        return "Electricity contract"
+        return "Energy contract"
     address = supply_address.get("shortForm")
     if not isinstance(address, str) or not address.strip():
-        return "Electricity contract"
+        return "Energy contract"
     return address.strip()
 
 
@@ -223,7 +243,7 @@ def _optional_number(value: Any, *, allow_negative: bool = True) -> float | None
         return None
     try:
         number = float(value)
-    except TypeError, ValueError:
+    except TypeError, ValueError, OverflowError:
         return None
     if not math.isfinite(number) or (not allow_negative and number < 0):
         return None
@@ -242,7 +262,7 @@ def _optional_date(value: Any) -> date | None:
     """Parse a Contact display date or ISO date."""
     if not isinstance(value, str) or not value.strip():
         return None
-    for date_format in ("%d %b %Y", "%Y-%m-%d"):
+    for date_format in ("%d %b %Y", "%Y-%m-%d", "%Y%m%d"):
         try:
             return datetime.strptime(value.strip(), date_format).date()
         except ValueError:

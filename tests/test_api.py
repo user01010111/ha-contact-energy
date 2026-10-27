@@ -39,6 +39,37 @@ USAGE_URL = (
 )
 
 
+async def test_bill_routes_use_same_session(hass, aioclient_mock):
+    aioclient_mock.post(
+        LOGIN_URL, json={"token": "session-example", "bp": "partner-example"}
+    )
+    index_url = (
+        f"{API_BASE_URL}/transactions/v2?account={TEST_ACCOUNT_ID}"
+        "&fromDate=20260101&toDate=20260301"
+    )
+    bill_url = (
+        f"{API_BASE_URL}/interactive-bill?ba={TEST_ACCOUNT_ID}"
+        "&bp=partner-example&invoiceId=invoice-example"
+    )
+    aioclient_mock.get(index_url, json={"transactions": []})
+    aioclient_mock.get(bill_url, json={"InvoiceNumber": "invoice-example"})
+    api = _api(hass)
+    assert await api.async_get_bill_transactions("20260101", "20260301") == {
+        "transactions": []
+    }
+    assert await api.async_get_bill("invoice-example") == {
+        "InvoiceNumber": "invoice-example"
+    }
+    assert aioclient_mock.call_count == 3
+
+
+async def test_bill_requires_business_partner(hass, aioclient_mock):
+    aioclient_mock.post(LOGIN_URL, json={"token": "session-example"})
+    with pytest.raises(MalformedResponse):
+        await _api(hass).async_get_bill("invoice-example")
+    assert aioclient_mock.call_count == 1
+
+
 def _api(hass) -> ContactEnergyApi:
     return ContactEnergyApi(
         hass,

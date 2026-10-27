@@ -1,4 +1,21 @@
-# Contact Energy v2.0.0
+# Release notes
+
+## v2.1.0
+
+- Add separately selectable piped-gas contracts with last-billed usage, GST-inclusive charges and reading quality. Bill dates and charge components are retained; no cumulative gas statistics or historical bill imports are created.
+- Show gas meter-reading dates and the gas share of reconciled current invoice charges, including GST. Missing or conflicting meter dates and unsupported invoice totals remain unknown.
+- For electricity contracts with multiple meters, show unknown when their reading dates disagree instead of taking the first meter's date.
+- Add electricity data freshness indicators and complete previous-day/month usage and cost summaries, with coverage and daily-average comparisons.
+- Retain up to 93 days of observed hours for summaries without increasing API requests or changing existing lifetime totals. Older missing history remains unknown.
+- Use Contact's reporting calendar for history requests and correction cutoffs, regardless of Home Assistant's timezone.
+- Retry statistics storage on every refresh, including unchanged data. Ignore expired corrections and invalid negative usage costs without discarding valid energy or earlier prices.
+- Handle oversized numeric responses and repair the local development launcher's import path.
+
+Back up Home Assistant before updating, then restart. Existing electricity entries, entity IDs and accumulated statistics are preserved. Add the integration again to select a gas contract.
+
+Gas support is limited to the current validated bill; credits and retrospective corrections remain unsupported. Gas snapshots are not cumulative Energy dashboard inputs. Electricity summaries stay unknown until every hour of their period has been collected; monthly comparisons may need two complete months.
+
+## v2.0.0
 
 Version 2.0.0 continues this unofficial integration under independent maintenance while preserving the `contact_energy` domain and existing Home Assistant configuration.
 
