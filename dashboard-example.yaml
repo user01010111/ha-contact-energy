@@ -1,0 +1,48 @@
+# Built-in cards only. Replace every REPLACE_* entity with your entity ID.
+# Enable Electricity usage history and Electricity usage profile first.
+title: Contact Energy
+views:
+  - title: Electricity
+    path: electricity
+    cards:
+      - type: entities
+        title: Latest complete day
+        entities:
+          - sensor.REPLACE_LATEST_DAY_DATE
+          - sensor.REPLACE_LATEST_DAY_ENERGY
+          - sensor.REPLACE_LATEST_DAY_FREE_ENERGY
+          - sensor.REPLACE_LATEST_DAY_PAID_ENERGY
+          - sensor.REPLACE_LATEST_DAY_COST
+      - type: markdown
+        title: Recent electricity usage
+        content: |
+          {% set rows = state_attr('sensor.REPLACE_HISTORY', 'daily') or [] -%}
+          | Consumption date | Total kWh | Free kWh | Paid kWh |
+          | --- | ---: | ---: | ---: |
+          {% for p in rows[-14:] | reverse -%}
+          | {{ p.start[:10] }} | {{ p.total_kwh | round(2) if p.total_kwh is number else 'Unknown' }} | {{ p.free_kwh | round(2) if p.free_kwh is number else 'Unknown' }} | {{ p.paid_kwh | round(2) if p.paid_kwh is number else 'Unknown' }} |
+          {% endfor -%}
+          {% if not rows %}Enable the history entity to see dated readings.{% endif %}
+      - type: markdown
+        title: Typical hour
+        content: |
+          {% set values = state_attr('sensor.REPLACE_PROFILE', 'hourly_average_kwh') or {} -%}
+          {% set samples = state_attr('sensor.REPLACE_PROFILE', 'hourly_samples') or {} -%}
+          Complete days only, within the latest 28-day window.
+
+          | Clock hour | Average kWh | Samples |
+          | --- | ---: | ---: |
+          {% for hour, value in values.items() -%}
+          | {{ '%02d:00' | format(hour | int) }} | {{ value | round(2) if value is number else 'Unknown' }} | {{ samples.get(hour, 0) }} |
+          {% endfor -%}
+      - type: markdown
+        title: Typical weekday
+        content: |
+          {% set names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] -%}
+          {% set values = state_attr('sensor.REPLACE_PROFILE', 'weekday_average_kwh') or {} -%}
+          {% set samples = state_attr('sensor.REPLACE_PROFILE', 'weekday_samples') or {} -%}
+          | Weekday | Average daily kWh | Complete days |
+          | --- | ---: | ---: |
+          {% for day, value in values.items() -%}
+          | {{ names[day | int] }} | {{ value | round(2) if value is number else 'Unknown' }} | {{ samples.get(day, 0) }} |
+          {% endfor -%}

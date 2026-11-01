@@ -1,5 +1,21 @@
 # Release notes
 
+## v2.2.0
+
+- Show the latest complete electricity day and its total, free, paid and reported cost values together. Delayed readings keep their consumption date; they are not labelled as yesterday.
+- Add month-to-date and rolling 7/30-day summaries with equal-length previous-period comparisons. Missing hours, prices or free-usage fields stay unknown.
+- Show free and paid usage for the previous calendar month. Free usage comes only from Contact's explicit uncharged values, not off-peak labels or inferred tariffs.
+- Add optional dated history and hourly/weekday profiles, with dashboard examples. History is bounded to 93 collected days; the optional charts need ApexCharts Card. These do not create additional Energy dashboard inputs.
+- Record when a complete day was first observed. This includes polling and backfill delays, so it is not Contact's exact publication time.
+- Show the selected contract's plan name and current electricity bill charges, including GST and billing dates. Plan names do not establish tariff rates or free-power schedules; bill snapshots are not cumulative cost statistics.
+- Fetch recent electricity days first without increasing the history window or request rate. Optional electricity bill and plan lookups run after the initial setup refresh.
+- Retain the last known plan and electricity bill during temporary lookup failures, retrying on a later scheduled refresh without bypassing rate-limit delays.
+- Add reported gas usage for the previous calendar month and up to 12 dated months, matching Contact's usage chart. Keep these separate from bill periods, charges and meter-reading quality; missing months stay unknown.
+
+Existing entries, entity IDs and accumulated energy/cost statistics are preserved. Yesterday usage/cost sensors start disabled on new installations; already-enabled sensors stay enabled. The new Yesterday free electricity sensor starts disabled on both new installations and upgrades. Enable the history and profile sensors if using the examples. Complete months and comparisons may take time to fill as data is collected.
+
+Gas billing remains current-bill-only. Gas recorder statistics, historical bill comparisons, credits and revised bills are not supported. Back up Home Assistant before updating, then restart.
+
 ## v2.1.0
 
 - Add separately selectable piped-gas contracts with last-billed usage, GST-inclusive charges and reading quality. Bill dates and charge components are retained; no cumulative gas statistics or historical bill imports are created.

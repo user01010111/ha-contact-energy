@@ -89,7 +89,7 @@ def test_metadata_and_hacs_release_contract() -> None:
         "iot_class": "cloud_polling",
         "issue_tracker": ("https://github.com/user01010111/ha-contact-energy/issues"),
         "requirements": [],
-        "version": "2.1.0",
+        "version": "2.2.0",
     }
 
     hacs = json.loads((ROOT / "hacs.json").read_text())

@@ -4,7 +4,7 @@ import asyncio
 import logging
 import math
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlencode
@@ -208,6 +208,18 @@ class ContactEnergyApi:
             raise MalformedResponse("Unexpected accounts response")
         return result
 
+    async def async_get_plan_details(self) -> dict[str, Any]:
+        """Return optional plan labels for the selected account."""
+        if not self._account_id:
+            raise MalformedResponse("Plan request is missing account selection")
+        query = urlencode({"ba": self._account_id})
+        result = await self._async_authenticated_request(
+            "GET", f"{API_BASE_URL}/usage/v2/plan-details?{query}", "plan_details"
+        )
+        if not isinstance(result, dict):
+            raise MalformedResponse("Unexpected plan details response")
+        return result
+
     async def async_get_usage(self, date: str) -> list[dict[str, Any]]:
         """Return hourly usage for one ISO date, or an empty list for no data."""
         if not self._account_id or not self._contract_id:
@@ -229,6 +241,40 @@ class ContactEnergyApi:
             isinstance(point, dict) for point in result
         ):
             raise MalformedResponse("Unexpected usage response")
+        return result
+
+    async def async_get_monthly_gas_usage(
+        self, start: str, end: str
+    ) -> list[dict[str, Any]]:
+        """Read at most twelve calendar months for the selected gas contract."""
+        try:
+            first, last = date.fromisoformat(start), date.fromisoformat(end)
+        except TypeError, ValueError:
+            raise MalformedResponse("Invalid monthly gas request range") from None
+        months = (last.year - first.year) * 12 + last.month - first.month
+        if (
+            first.day != 1
+            or last.day != 1
+            or not 1 <= months <= 12
+            or not self._account_id
+            or not self._contract_id
+        ):
+            raise MalformedResponse("Invalid monthly gas request range")
+        query = urlencode(
+            {"ba": self._account_id, "interval": "monthly", "from": start, "to": end}
+        )
+        result = await self._async_authenticated_request(
+            "POST",
+            f"{API_BASE_URL}/usage/v2/{self._contract_id}?{query}",
+            "monthly_gas",
+            empty_statuses=frozenset({204, 404}),
+        )
+        if result is None:
+            return []
+        if not isinstance(result, list) or not all(
+            isinstance(row, dict) for row in result
+        ):
+            raise MalformedResponse("Unexpected monthly gas response")
         return result
 
     async def async_get_bill_transactions(self, start: str, end: str) -> dict[str, Any]:

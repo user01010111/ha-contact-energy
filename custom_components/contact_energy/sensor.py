@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -28,7 +28,8 @@ from .const import (
     contract_device_name,
 )
 from .coordinator import ContactEnergyCoordinator, ContactEnergyData
-from .periods import percentage_change
+from .models import CONTACT_TIME_ZONE, gas_month_window
+from .periods import PeriodSummary, percentage_change
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -37,6 +38,7 @@ class ContactEnergySensorDescription(SensorEntityDescription):
 
     value_fn: Callable[[ContactEnergyData], Any] | None = None
     period_key: str | None = None
+    period_field: str | None = None
     comparison_key: str | None = None
     bill_field: str | None = None
 
@@ -133,12 +135,59 @@ SENSOR_DESCRIPTIONS: tuple[ContactEnergySensorDescription, ...] = (
         value_fn=_usage_status,
     ),
     ContactEnergySensorDescription(
+        key="latest_day_date",
+        name="Latest complete electricity day",
+        device_class=SensorDeviceClass.DATE,
+        period_key="latest_day",
+        period_field="start",
+    ),
+    ContactEnergySensorDescription(
+        key="latest_day_energy",
+        name="Latest complete day electricity usage",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        period_key="latest_day",
+    ),
+    ContactEnergySensorDescription(
+        key="latest_day_free_energy",
+        name="Latest complete day free electricity",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        period_key="latest_day",
+        period_field="free_energy",
+    ),
+    ContactEnergySensorDescription(
+        key="latest_day_paid_energy",
+        name="Latest complete day paid electricity",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        period_key="latest_day",
+        period_field="paid_energy",
+    ),
+    ContactEnergySensorDescription(
+        key="latest_day_cost",
+        name="Latest complete day electricity cost",
+        device_class=SensorDeviceClass.MONETARY,
+        period_key="latest_day",
+    ),
+    ContactEnergySensorDescription(
         key="yesterday_energy",
         name="Yesterday electricity usage",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         period_key="yesterday",
         comparison_key="previous_day",
+        entity_registry_enabled_default=False,
+    ),
+    ContactEnergySensorDescription(
+        key="yesterday_free_energy",
+        name="Yesterday free electricity",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        period_key="yesterday",
+        period_field="free_energy",
+        icon="mdi:lightning-bolt-outline",
+        entity_registry_enabled_default=False,
     ),
     ContactEnergySensorDescription(
         key="yesterday_cost",
@@ -146,6 +195,7 @@ SENSOR_DESCRIPTIONS: tuple[ContactEnergySensorDescription, ...] = (
         device_class=SensorDeviceClass.MONETARY,
         period_key="yesterday",
         comparison_key="previous_day",
+        entity_registry_enabled_default=False,
     ),
     ContactEnergySensorDescription(
         key="last_month_energy",
@@ -156,20 +206,100 @@ SENSOR_DESCRIPTIONS: tuple[ContactEnergySensorDescription, ...] = (
         comparison_key="previous_month",
     ),
     ContactEnergySensorDescription(
+        key="last_month_free_energy",
+        name="Last month free electricity",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        period_key="last_month",
+        period_field="free_energy",
+    ),
+    ContactEnergySensorDescription(
+        key="last_month_paid_energy",
+        name="Last month paid electricity",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        period_key="last_month",
+        period_field="paid_energy",
+    ),
+    ContactEnergySensorDescription(
         key="last_month_cost",
         name="Last month electricity cost",
         device_class=SensorDeviceClass.MONETARY,
         period_key="last_month",
         comparison_key="previous_month",
     ),
+    ContactEnergySensorDescription(
+        key="plan_name",
+        name="Plan",
+        icon="mdi:text-box-outline",
+        value_fn=lambda data: data.plan_name,
+    ),
+    ContactEnergySensorDescription(
+        key="billed_electricity_cost",
+        name="Last billed electricity charges",
+        device_class=SensorDeviceClass.MONETARY,
+        icon="mdi:cash-check",
+        value_fn=lambda data: (
+            data.electricity_bill.cost if data.electricity_bill else None
+        ),
+    ),
+    ContactEnergySensorDescription(
+        key="usage_profile",
+        name="Electricity usage profile",
+        icon="mdi:chart-bar",
+        native_unit_of_measurement="days",
+        entity_registry_enabled_default=False,
+        value_fn=lambda data: (
+            data.statistics.profile.complete_days if data.statistics.profile else None
+        ),
+    ),
+    ContactEnergySensorDescription(
+        key="usage_history",
+        name="Electricity usage history",
+        icon="mdi:chart-timeline-variant",
+        native_unit_of_measurement="days",
+        entity_registry_enabled_default=False,
+        value_fn=lambda data: (
+            sum(day.energy is not None for day in data.statistics.history.daily)
+            if data.statistics.history
+            else None
+        ),
+    ),
+    *(
+        ContactEnergySensorDescription(
+            key=f"{period}_{metric}",
+            name=f"{name} electricity {label}",
+            device_class=device_class,
+            native_unit_of_measurement=unit,
+            period_key=period,
+            comparison_key=previous,
+        )
+        for period, previous, name in (
+            ("month_to_date", "previous_month_to_date", "Month to date"),
+            ("rolling_7_days", "previous_7_days", "Latest 7 complete days"),
+            ("rolling_30_days", "previous_30_days", "Latest 30 complete days"),
+        )
+        for metric, label, device_class, unit in (
+            ("energy", "usage", SensorDeviceClass.ENERGY, UnitOfEnergy.KILO_WATT_HOUR),
+            ("cost", "cost", SensorDeviceClass.MONETARY, None),
+        )
+    ),
 )
 
 
 GAS_SENSOR_DESCRIPTIONS = (
+    ContactEnergySensorDescription(
+        key="monthly_gas_usage",
+        name="Last month reported gas usage",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        icon="mdi:fire",
+    ),
     *(
         description
         for description in SENSOR_DESCRIPTIONS
-        if description.key in {"previous_reading_date", "next_reading_date"}
+        if description.key
+        in {"previous_reading_date", "next_reading_date", "plan_name"}
     ),
     ContactEnergySensorDescription(
         key="billed_gas_usage",
@@ -231,6 +361,7 @@ class ContactEnergySensor(CoordinatorEntity[ContactEnergyCoordinator], SensorEnt
 
     entity_description: ContactEnergySensorDescription
     _attr_has_entity_name = True
+    _unrecorded_attributes = frozenset({"daily", "monthly"})
 
     def __init__(
         self,
@@ -260,6 +391,10 @@ class ContactEnergySensor(CoordinatorEntity[ContactEnergyCoordinator], SensorEnt
     @property
     def available(self) -> bool:
         """Keep unsupported bills unavailable without repeatedly retrying setup."""
+        if self.entity_description.key == "billed_electricity_cost":
+            return super().available and self.coordinator.data.electricity_bill_valid
+        if self.entity_description.key == "monthly_gas_usage":
+            return super().available and self.coordinator.data.gas_monthly_valid
         return super().available and (
             not self.entity_description.bill_field
             or self.coordinator.data.gas_bill_valid
@@ -269,6 +404,17 @@ class ContactEnergySensor(CoordinatorEntity[ContactEnergyCoordinator], SensorEnt
     def native_value(self) -> float | date | datetime | str | None:
         """Return the validated coordinator value."""
         description = self.entity_description
+        if description.key == "monthly_gas_usage":
+            today = dt_util.utcnow().astimezone(CONTACT_TIME_ZONE).date()
+            month = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+            return next(
+                (
+                    p.energy
+                    for p in self.coordinator.data.gas_monthly
+                    if p.start == month
+                ),
+                None,
+            )
         if description.bill_field:
             bill = self.coordinator.data.gas_bill
             return getattr(bill, description.bill_field) if bill is not None else None
@@ -278,6 +424,8 @@ class ContactEnergySensor(CoordinatorEntity[ContactEnergyCoordinator], SensorEnt
             )
             if period is None:
                 return None
+            if description.period_field:
+                return getattr(period, description.period_field)
             if description.device_class == SensorDeviceClass.MONETARY:
                 return period.cost
             return period.energy
@@ -303,6 +451,56 @@ class ContactEnergySensor(CoordinatorEntity[ContactEnergyCoordinator], SensorEnt
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Expose period coverage and comparable daily averages, not partial totals."""
         description = self.entity_description
+        if description.key == "monthly_gas_usage":
+            data = self.coordinator.data
+            start, end = gas_month_window(
+                dt_util.utcnow().astimezone(CONTACT_TIME_ZONE).date()
+            )
+            return {
+                "period_start": (end - timedelta(days=1)).replace(day=1).isoformat(),
+                "period_end_exclusive": end.isoformat(),
+                "last_successful_fetch": data.gas_monthly_updated.isoformat()
+                if data.gas_monthly_updated
+                else None,
+                "monthly": [
+                    {"start": p.start.isoformat(), "energy_kwh": p.energy}
+                    for p in data.gas_monthly
+                    if start <= p.start < end
+                ],
+            }
+        if description.key == "billed_electricity_cost":
+            bill = self.coordinator.data.electricity_bill
+            if bill is None:
+                return None
+            return {
+                "period_start": bill.start.isoformat(),
+                "period_end": bill.end.isoformat(),
+                "days": bill.days,
+                "includes_gst": True,
+                "charges_excl_gst": bill.cost_excl_gst,
+                "gst": bill.gst,
+            }
+        if description.key == "usage_history":
+            history = self.coordinator.data.statistics.history
+            if history is None:
+                return None
+            return {
+                "daily": [_history_row(period) for period in history.daily],
+                "monthly": [_history_row(period) for period in history.monthly],
+            }
+        if description.key == "usage_profile":
+            profile = self.coordinator.data.statistics.profile
+            if profile is None:
+                return None
+            return {
+                "period_start": profile.start.isoformat(),
+                "period_end_exclusive": profile.end.isoformat(),
+                "complete_days": profile.complete_days,
+                "hourly_average_kwh": dict(enumerate(profile.hourly_average)),
+                "hourly_samples": dict(enumerate(profile.hourly_samples)),
+                "weekday_average_kwh": dict(enumerate(profile.weekday_average)),
+                "weekday_samples": dict(enumerate(profile.weekday_samples)),
+            }
         if description.key == "next_reading_date":
             estimate = self.coordinator.data.account.next_reading_is_estimate
             return (
@@ -343,6 +541,41 @@ class ContactEnergySensor(CoordinatorEntity[ContactEnergyCoordinator], SensorEnt
         period = periods.get(description.period_key)
         if period is None:
             return None
+        if description.period_key == "latest_day" or description.period_field in {
+            "free_energy",
+            "paid_energy",
+        }:
+            attributes = {
+                "period_start": period.start.isoformat(),
+                "period_end_exclusive": period.end.isoformat(),
+                "expected_hours": period.expected_hours,
+                "received_hours": period.received_hours,
+                "cost_hours": period.cost_hours,
+                "free_hours": period.free_hours,
+                "total_kwh": period.energy,
+                "free_kwh": period.free_energy,
+                "paid_kwh": period.paid_energy,
+                "free_percentage": period.free_percentage,
+            }
+            if description.key == "latest_day_date":
+                statistics = self.coordinator.data.statistics
+                observed = statistics.first_complete_observed
+                started = statistics.observation_started
+                end = datetime.combine(period.end, time(), CONTACT_TIME_ZONE)
+                attributes.update(
+                    {
+                        "first_observed_complete": observed.isoformat()
+                        if observed
+                        else None,
+                        "age_hours_at_first_observation": (
+                            (observed - end).total_seconds() / 3600
+                            if observed
+                            else None
+                        ),
+                        "period_predates_tracking": end <= started if started else None,
+                    }
+                )
+            return attributes
         previous = periods.get(description.comparison_key)
         monetary = description.device_class == SensorDeviceClass.MONETARY
         average = period.cost_per_day if monetary else period.energy_per_day
@@ -352,7 +585,7 @@ class ContactEnergySensor(CoordinatorEntity[ContactEnergyCoordinator], SensorEnt
                 previous_average = previous.cost_per_day
             elif not monetary:
                 previous_average = previous.energy_per_day
-        return {
+        attributes = {
             "period_start": period.start.isoformat(),
             "period_end_exclusive": period.end.isoformat(),
             "expected_hours": period.expected_hours,
@@ -364,3 +597,35 @@ class ContactEnergySensor(CoordinatorEntity[ContactEnergyCoordinator], SensorEnt
             "comparison_start": previous.start.isoformat() if previous else None,
             "comparison_end_exclusive": previous.end.isoformat() if previous else None,
         }
+        if description.period_key in {
+            "month_to_date",
+            "rolling_7_days",
+            "rolling_30_days",
+        }:
+            attributes.update(
+                {
+                    "covered_through": (period.end - timedelta(days=1)).isoformat(),
+                    "free_hours": period.free_hours,
+                    "total_kwh": period.energy,
+                    "free_kwh": period.free_energy,
+                    "paid_kwh": period.paid_energy,
+                    "free_percentage": period.free_percentage,
+                }
+            )
+        return attributes
+
+
+def _history_row(period: PeriodSummary) -> dict[str, Any]:
+    """Expose only period totals/coverage and an unambiguous consumption date."""
+    return {
+        "start": datetime.combine(period.start, time(), CONTACT_TIME_ZONE).isoformat(),
+        "end_exclusive": datetime.combine(
+            period.end, time(), CONTACT_TIME_ZONE
+        ).isoformat(),
+        "total_kwh": period.energy,
+        "free_kwh": period.free_energy,
+        "paid_kwh": period.paid_energy,
+        "expected_hours": period.expected_hours,
+        "received_hours": period.received_hours,
+        "free_hours": period.free_hours,
+    }

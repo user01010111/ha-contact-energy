@@ -287,6 +287,14 @@ async def test_gas_setup_refresh_reload_and_wrong_bill(
             AsyncMock(return_value=accounts_payload),
         ),
         patch(
+            "custom_components.contact_energy.ContactEnergyApi.async_get_plan_details",
+            AsyncMock(return_value={}),
+        ),
+        patch(
+            "custom_components.contact_energy.ContactEnergyApi.async_get_monthly_gas_usage",
+            AsyncMock(return_value=[]),
+        ),
+        patch(
             "custom_components.contact_energy.ContactEnergyApi.async_get_bill_transactions",
             AsyncMock(return_value=transactions),
         ) as index,
@@ -317,7 +325,7 @@ async def test_gas_setup_refresh_reload_and_wrong_bill(
         }
         assert (
             len(er.async_entries_for_config_entry(registry, mock_config_entry.entry_id))
-            == 6
+            == 8
         )
         assert hass.states.get(entities["billed_gas_usage"]).state == "100.0"
         cost = hass.states.get(entities["billed_gas_cost"])
@@ -438,6 +446,7 @@ async def test_unsupported_gas_bill_loads_without_setup_retry(
     api.async_get_accounts.return_value = accounts_payload
     api.async_get_bill_transactions.return_value = transactions
     api.async_get_bill.return_value = gas_bill_payload
+    api.async_get_monthly_gas_usage.return_value = []
     with patch(
         "custom_components.contact_energy.ContactEnergyApi", return_value=api
     ) as client:
@@ -447,7 +456,7 @@ async def test_unsupported_gas_bill_loads_without_setup_retry(
         entities = er.async_entries_for_config_entry(
             er.async_get(hass), mock_config_entry.entry_id
         )
-        assert len(entities) == 6
+        assert len(entities) == 8
         assert all(
             hass.states.get(e.entity_id).state
             == (
@@ -455,6 +464,8 @@ async def test_unsupported_gas_bill_loads_without_setup_retry(
                 if e.unique_id.endswith("_previous_reading_date")
                 else "2026-09-02"
                 if e.unique_id.endswith("_next_reading_date")
+                else "unknown"
+                if e.unique_id.endswith(("_plan_name", "_monthly_gas_usage"))
                 else "unavailable"
             )
             for e in entities

@@ -138,6 +138,14 @@ async def test_entry_reload_does_not_wait_for_history_backfill(
             "custom_components.contact_energy.ContactEnergyApi.async_get_usage",
             AsyncMock(side_effect=slow_usage),
         ),
+        patch(
+            "custom_components.contact_energy.ContactEnergyApi.async_get_bill_transactions",
+            AsyncMock(return_value={"transactions": []}),
+        ),
+        patch(
+            "custom_components.contact_energy.ContactEnergyApi.async_get_plan_details",
+            AsyncMock(return_value={}),
+        ),
     ):
         assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
         assert mock_config_entry.state is ConfigEntryState.LOADED

@@ -112,7 +112,7 @@ def test_monetary_descriptions_do_not_use_a_measurement_state_class() -> None:
         if description.device_class is SensorDeviceClass.MONETARY
     ]
 
-    assert len(monetary_descriptions) == 5
+    assert len(monetary_descriptions) == 10
     assert all(description.state_class is None for description in monetary_descriptions)
 
 
@@ -236,12 +236,149 @@ def test_cost_comparison_requires_matching_currency(hass, accounts_payload):
     "key",
     [
         "yesterday_energy",
+        "yesterday_free_energy",
         "yesterday_cost",
         "last_month_energy",
         "last_month_cost",
+        "last_month_free_energy",
+        "last_month_paid_energy",
+        "latest_day_date",
+        "latest_day_energy",
+        "latest_day_free_energy",
+        "latest_day_paid_energy",
+        "latest_day_cost",
+        "month_to_date_energy",
+        "month_to_date_cost",
+        "rolling_7_days_energy",
+        "rolling_7_days_cost",
+        "rolling_30_days_energy",
+        "rolling_30_days_cost",
     ],
 )
 def test_missing_summary_is_unknown(hass, accounts_payload, key):
     sensor = _sensor(hass, accounts_payload, key, StatisticsResult(0, 0, None))
     assert sensor.native_value is None
     assert sensor.extra_state_attributes is None
+
+
+@pytest.mark.parametrize(
+    ("total", "free", "percentage"),
+    [(24, 6, 25), (24, 0, 0), (0, 0, None), (24, None, None), (None, None, None)],
+)
+def test_free_sensor_reports_snapshot_and_percentage_without_double_counting(
+    hass, accounts_payload, total, free, percentage
+):
+    period = PeriodSummary(
+        date(2026, 8, 8),
+        date(2026, 8, 9),
+        24,
+        24 if total is not None else 23,
+        0,
+        total,
+        None,
+        None,
+        free_energy=free,
+        free_hours=24 if free is not None else 23,
+    )
+    sensor = _sensor(
+        hass,
+        accounts_payload,
+        "yesterday_free_energy",
+        StatisticsResult(0, 0, "NZD", periods={"yesterday": period}),
+    )
+    assert sensor.native_value == free
+    assert sensor.native_unit_of_measurement == "kWh"
+    assert sensor.state_class is None
+    assert sensor.extra_state_attributes["free_percentage"] == percentage
+    assert sensor.extra_state_attributes["free_hours"] == period.free_hours
+    assert "daily_average" not in sensor.extra_state_attributes
+
+
+@pytest.mark.parametrize("period_key", ["latest_day", "last_month"])
+@pytest.mark.parametrize(
+    ("metric", "value"),
+    [("energy", 24), ("free_energy", 6), ("paid_energy", 18), ("cost", 9)],
+)
+def test_daily_and_monthly_sensors_expose_the_same_period(
+    hass, accounts_payload, period_key, metric, value
+):
+    start, end = date(2026, 8, 1), date(2026, 9, 1)
+    period = PeriodSummary(start, end, 744, 744, 744, 24, 9, "NZD", 6, 744)
+    sensor = _sensor(
+        hass,
+        accounts_payload,
+        f"{period_key}_{metric}",
+        StatisticsResult(0, 0, "NZD", periods={period_key: period}),
+    )
+    assert sensor.native_value == value
+    assert sensor.state_class is None
+    assert sensor.extra_state_attributes["period_start"] == start.isoformat()
+    assert sensor.extra_state_attributes["period_end_exclusive"] == end.isoformat()
+    if period_key == "latest_day" or metric in ("free_energy", "paid_energy"):
+        assert sensor.extra_state_attributes["total_kwh"] == 24
+        assert sensor.extra_state_attributes["free_kwh"] == 6
+        assert sensor.extra_state_attributes["paid_kwh"] == 18
+        assert sensor.extra_state_attributes["free_percentage"] == 25
+
+
+@pytest.mark.parametrize(
+    ("period_key", "previous_key"),
+    [
+        ("month_to_date", "previous_month_to_date"),
+        ("rolling_7_days", "previous_7_days"),
+        ("rolling_30_days", "previous_30_days"),
+    ],
+)
+@pytest.mark.parametrize(("metric", "value"), [("energy", 48), ("cost", 12)])
+def test_covered_comparisons_report_dates_breakdown_and_change(
+    hass, accounts_payload, period_key, previous_key, metric, value
+):
+    current = PeriodSummary(
+        date(2026, 8, 1), date(2026, 8, 3), 48, 48, 48, 48, 12, "NZD", 6, 48
+    )
+    previous = PeriodSummary(
+        date(2026, 7, 1), date(2026, 7, 3), 48, 48, 48, 24, 6, "NZD"
+    )
+    sensor = _sensor(
+        hass,
+        accounts_payload,
+        f"{period_key}_{metric}",
+        StatisticsResult(
+            0, 0, "NZD", periods={period_key: current, previous_key: previous}
+        ),
+    )
+    assert sensor.native_value == value
+    assert sensor.state_class is None
+    assert sensor.extra_state_attributes["covered_through"] == "2026-08-02"
+    assert sensor.extra_state_attributes["comparison_end_exclusive"] == "2026-07-03"
+    assert sensor.extra_state_attributes["change_percent"] == 100
+    assert sensor.extra_state_attributes["free_kwh"] == 6
+    assert sensor.extra_state_attributes["paid_kwh"] == 42
+
+
+def test_complete_day_observation_is_not_claimed_as_provider_publication(
+    hass, accounts_payload
+):
+    period = PeriodSummary(
+        date(2026, 8, 1), date(2026, 8, 2), 24, 24, 0, 24, None, None
+    )
+    # Day ends at 12:00 UTC; it was first observed complete 28 hours later.
+    observed = datetime(2026, 8, 2, 16, tzinfo=UTC)
+    sensor = _sensor(
+        hass,
+        accounts_payload,
+        "latest_day_date",
+        StatisticsResult(
+            0,
+            0,
+            None,
+            periods={"latest_day": period},
+            observation_started=observed - timedelta(hours=1),
+            first_complete_observed=observed,
+        ),
+    )
+    attrs = sensor.extra_state_attributes
+    assert attrs["first_observed_complete"] == observed.isoformat()
+    assert attrs["age_hours_at_first_observation"] == 28
+    assert attrs["period_predates_tracking"] is True
+    assert "publication_time" not in attrs

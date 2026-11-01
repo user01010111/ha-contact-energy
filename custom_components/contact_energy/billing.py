@@ -1,4 +1,4 @@
-"""Validate current gas bills without retaining invoice or customer identifiers."""
+"""Validate current bills without retaining invoice or customer identifiers."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -27,8 +27,20 @@ class GasBill:
     invoice_share_percent: float | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ElectricityBill:
+    """Reconciled contract charges, independent of hourly usage estimates."""
+
+    start: date
+    end: date
+    days: int
+    cost: float
+    cost_excl_gst: float
+    gst: float
+
+
 def _invalid() -> MalformedResponse:
-    return MalformedResponse("Gas bill could not be reconciled")
+    return MalformedResponse("Energy bill could not be reconciled")
 
 
 def _number(value: Any) -> Decimal:
@@ -67,6 +79,8 @@ def _identifier(value: Any) -> str:
 
 
 def _rows(payload: Mapping[str, Any], key: str) -> list[dict[str, Any]]:
+    if not isinstance(payload, Mapping):
+        raise _invalid()
     result = payload.get(key)
     if not isinstance(result, list) or not all(isinstance(v, dict) for v in result):
         raise _invalid()
@@ -126,15 +140,16 @@ def _invoice_charges(payload: Mapping[str, Any]) -> Decimal | None:
         return None
 
 
-def parse_gas_bill(
+def _current_installation(
     payload: Mapping[str, Any],
     *,
     account_id: str,
     contract_id: str,
     icp: str,
     invoice_id: str,
-) -> GasBill:
-    """Reconcile identity, coverage, units and tax before exposing a snapshot."""
+    product: str,
+) -> tuple[dict[str, Any], date, date, int]:
+    """Share current-bill ownership and billing-period validation across fuels."""
     technical = _rows(payload, "TechnicalDetails")
     if (
         len(technical) != 1
@@ -150,7 +165,7 @@ def parse_gas_bill(
     if len(installations) != 1:
         raise _invalid()
     installation = installations[0]
-    if installation.get("ICP") != icp or installation.get("Product") != "Natural Gas":
+    if installation.get("ICP") != icp or installation.get("Product") != product:
         raise _invalid()
     start, end = (
         _date(installation.get("ValidFrom")),
@@ -159,6 +174,73 @@ def parse_gas_bill(
     days = (end - start).days + 1
     if not 1 <= days <= 366 or _number(installation.get("Days")) != days:
         raise _invalid()
+    return installation, start, end, days
+
+
+def _contract_charges(
+    payload: Mapping[str, Any], contract_id: str, premise: Any, classification: str
+) -> tuple[Decimal, Decimal, Decimal]:
+    """Read the selected service's explicit pre-tax, tax and post-tax totals."""
+    details = [
+        v
+        for v in _rows(payload, "ClassificationDetails")
+        if v.get("Contract") == contract_id
+    ]
+    if (
+        len(details) != 1
+        or details[0].get("Classification") != classification
+        or _identifier(details[0].get("Premise")) != _identifier(premise)
+    ):
+        raise _invalid()
+    excl, gst, incl = (
+        _number(details[0].get(key))
+        for key in ("AmountExclGST", "GSTAmount", "AmountInclGST")
+    )
+    if excl + gst != incl:
+        raise _invalid()
+    return excl, gst, incl
+
+
+def parse_electricity_bill(
+    payload: Mapping[str, Any],
+    *,
+    account_id: str,
+    contract_id: str,
+    icp: str,
+    invoice_id: str,
+) -> ElectricityBill:
+    """Expose actual electricity charges without guessing missing tariff lines."""
+    installation, start, end, days = _current_installation(
+        payload,
+        account_id=account_id,
+        contract_id=contract_id,
+        icp=icp,
+        invoice_id=invoice_id,
+        product="Electricity",
+    )
+    excl, gst, incl = _contract_charges(
+        payload, contract_id, installation.get("Premise"), "001"
+    )
+    return ElectricityBill(start, end, days, float(incl), float(excl), float(gst))
+
+
+def parse_gas_bill(
+    payload: Mapping[str, Any],
+    *,
+    account_id: str,
+    contract_id: str,
+    icp: str,
+    invoice_id: str,
+) -> GasBill:
+    """Reconcile identity, coverage, units and tax before exposing a snapshot."""
+    installation, start, end, days = _current_installation(
+        payload,
+        account_id=account_id,
+        contract_id=contract_id,
+        icp=icp,
+        invoice_id=invoice_id,
+        product="Natural Gas",
+    )
     registers = [
         v
         for v in _rows(payload, "Registers")
@@ -189,24 +271,9 @@ def parse_gas_bill(
         if qualities == {"03"}
         else "unknown"
     )
-    details = [
-        v
-        for v in _rows(payload, "ClassificationDetails")
-        if v.get("Contract") == contract_id
-    ]
-    if (
-        len(details) != 1
-        or details[0].get("Classification") != "002"
-        or details[0].get("Premise") != installation.get("Premise")
-    ):
-        raise _invalid()
-    detail = details[0]
-    excl, incl, gst = (
-        _number(detail.get(key))
-        for key in ("AmountExclGST", "AmountInclGST", "GSTAmount")
+    excl, gst, incl = _contract_charges(
+        payload, contract_id, installation.get("Premise"), "002"
     )
-    if excl + gst != incl:
-        raise _invalid()
     totals = []
     for key in ("VariableCharges", "FixedCharges"):
         rows = [v for v in _rows(payload, key) if v.get("Contract") == contract_id]

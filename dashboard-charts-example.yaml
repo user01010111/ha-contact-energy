@@ -1,0 +1,97 @@
+# Optional ApexCharts Card 2.2.3 example; install the frontend card separately.
+# Enable Electricity usage history and replace sensor.REPLACE_HISTORY throughout.
+# Noon markers represent consumption dates, not the time electricity was used.
+# Cancel the card's current server offset so historical DST cannot change dates.
+# Raw points preserve nulls. Do not add sum aggregation or missing-value filling.
+type: vertical-stack
+cards:
+  - type: custom:apexcharts-card
+    graph_span: 94d
+    stacked: true
+    apex_config:
+      tooltip:
+        x:
+          format: dd MMM yyyy
+    header:
+      show: true
+      title: Free and paid electricity — daily
+      show_states: false
+    series:
+      - entity: sensor.REPLACE_HISTORY
+        name: Free
+        type: column
+        unit: kWh
+        extend_to: false
+        group_by:
+          func: raw
+        show:
+          legend_value: false
+        data_generator: |
+          const offset = hass.locale.time_zone === 'server'
+            ? (moment().utcOffset() - moment().tz(hass.config.time_zone).utcOffset()) * 60000 : 0;
+          return (entity.attributes.daily ?? []).map(p => [new Date(p.start.slice(0, 10) + 'T12:00:00').getTime() + offset,
+            Number.isFinite(p.free_kwh) && Number.isFinite(p.paid_kwh) ? p.free_kwh : null])
+            .filter(p => Number.isFinite(p[0])).sort((a, b) => a[0] - b[0]);
+      - entity: sensor.REPLACE_HISTORY
+        name: Paid
+        type: column
+        unit: kWh
+        extend_to: false
+        group_by:
+          func: raw
+        show:
+          legend_value: false
+        data_generator: |
+          const offset = hass.locale.time_zone === 'server'
+            ? (moment().utcOffset() - moment().tz(hass.config.time_zone).utcOffset()) * 60000 : 0;
+          return (entity.attributes.daily ?? []).map(p => [new Date(p.start.slice(0, 10) + 'T12:00:00').getTime() + offset,
+            Number.isFinite(p.free_kwh) && Number.isFinite(p.paid_kwh) ? p.paid_kwh : null])
+            .filter(p => Number.isFinite(p[0])).sort((a, b) => a[0] - b[0]);
+  - type: custom:apexcharts-card
+    graph_span: 124d
+    stacked: true
+    apex_config:
+      tooltip:
+        x:
+          format: dd MMM yyyy
+    header:
+      show: true
+      title: Free and paid electricity — complete months
+      show_states: false
+    series:
+      - entity: sensor.REPLACE_HISTORY
+        name: Free
+        type: column
+        unit: kWh
+        extend_to: false
+        group_by:
+          func: raw
+        show:
+          legend_value: false
+        data_generator: |
+          const offset = hass.locale.time_zone === 'server'
+            ? (moment().utcOffset() - moment().tz(hass.config.time_zone).utcOffset()) * 60000 : 0;
+          return (entity.attributes.monthly ?? []).map(p => [new Date(p.start.slice(0, 10) + 'T12:00:00').getTime() + offset,
+            Number.isFinite(p.free_kwh) && Number.isFinite(p.paid_kwh) ? p.free_kwh : null])
+            .filter(p => Number.isFinite(p[0])).sort((a, b) => a[0] - b[0]);
+      - entity: sensor.REPLACE_HISTORY
+        name: Paid
+        type: column
+        unit: kWh
+        extend_to: false
+        group_by:
+          func: raw
+        show:
+          legend_value: false
+        data_generator: |
+          const offset = hass.locale.time_zone === 'server'
+            ? (moment().utcOffset() - moment().tz(hass.config.time_zone).utcOffset()) * 60000 : 0;
+          return (entity.attributes.monthly ?? []).map(p => [new Date(p.start.slice(0, 10) + 'T12:00:00').getTime() + offset,
+            Number.isFinite(p.free_kwh) && Number.isFinite(p.paid_kwh) ? p.paid_kwh : null])
+            .filter(p => Number.isFinite(p[0])).sort((a, b) => a[0] - b[0]);
+  - type: markdown
+    content: >-
+      Blank bars can mean zero usage or unknown coverage. Check the dated history
+      table to distinguish them. These charts do not add consumption to the Energy
+      dashboard. Monthly totals require every hour of the calendar month.
+      Bars mark consumption dates, not an hour of use.
