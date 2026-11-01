@@ -47,6 +47,100 @@ class UsagePoint:
     energy: float
     cost: float | None
     currency: str | None
+    free_energy: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MonthlyGasUsage:
+    """Contact's calendar-month estimate/report, independent of invoice readings."""
+
+    start: date
+    energy: float | None
+
+
+def gas_month_window(today: date) -> tuple[date, date]:
+    """Return the last twelve calendar months, excluding the open month."""
+    return today.replace(year=today.year - 1, day=1), today.replace(day=1)
+
+
+def parse_monthly_gas_usage(
+    payload: Any, start: date, end: date
+) -> tuple[MonthlyGasUsage, ...]:
+    """Validate dated monthly reports without inventing cost or reading quality."""
+    if not isinstance(payload, list) or len(payload) > 13:
+        raise MalformedResponse("Unexpected monthly gas response")
+    months: dict[date, MonthlyGasUsage] = {}
+    for row in payload:
+        if not isinstance(row, Mapping):
+            raise MalformedResponse("Unexpected monthly gas row")
+        stamp = _optional_datetime(row.get("date"))
+        local = stamp.astimezone(CONTACT_TIME_ZONE) if stamp is not None else None
+        unit = row.get("unit")
+        if (
+            local is None
+            or local.day != 1
+            or local.hour != 0
+            or any(
+                type(row.get(key)) is not int
+                for key in ("year", "month", "day", "hour")
+            )
+            or (row["year"], row["month"], row["day"], row["hour"])
+            != (local.year, local.month, 1, 0)
+            or row.get("timeZone") != "Pacific/Auckland"
+            or not isinstance(unit, str)
+            or unit.strip().casefold() != "kwh"
+        ):
+            raise MalformedResponse("Invalid monthly gas period")
+        energy = _optional_number(row.get("value"), allow_negative=False)
+        if row.get("value") is not None and energy is None:
+            raise MalformedResponse("Invalid monthly gas usage")
+        month = local.date()
+        if month in months:
+            raise MalformedResponse("Duplicate monthly gas period")
+        months[month] = MonthlyGasUsage(month, energy)
+    return tuple(months[month] for month in sorted(months) if start <= month < end)
+
+
+def parse_plan_name(
+    payload: Mapping[str, Any], account_id: str, contract_id: str
+) -> str | None:
+    """Select one account-owned contract label, without inferring tariff terms."""
+    if not isinstance(payload, Mapping) or _identifier_value(
+        payload.get("accountId")
+    ) != _identifier_value(account_id):
+        raise MalformedResponse("Plan account does not match selection")
+    premises = payload.get("premises")
+    if not isinstance(premises, list):
+        raise MalformedResponse("Unexpected plan premises")
+    names = []
+    for premise in premises:
+        if not isinstance(premise, Mapping) or not isinstance(
+            premise.get("services"), list
+        ):
+            raise MalformedResponse("Unexpected plan services")
+        for service in premise["services"]:
+            if not isinstance(service, Mapping) or not isinstance(
+                service.get("contract"), Mapping
+            ):
+                raise MalformedResponse("Unexpected plan contract")
+            if _identifier_value(service["contract"].get("contractId")) != (
+                _identifier_value(contract_id)
+            ):
+                continue
+            details = service.get("planDetails")
+            name = (
+                details.get("externalPlanDescription")
+                if isinstance(details, Mapping)
+                else None
+            )
+            names.append(name)
+    if len(names) != 1:
+        return None
+    name = names[0]
+    if not isinstance(name, str) or not name.isprintable():
+        return None
+    name = name.strip()
+    return name if 1 <= len(name) <= 255 else None
 
 
 def parse_contracts(payload: Mapping[str, Any]) -> list[Contract]:
@@ -193,11 +287,18 @@ def parse_usage_points(
                     else None
                 ),
                 currency=currency,
+                free_energy=parse_free_energy(raw_point.get("unchargedValue"), energy),
             )
         )
     if payload and not points:
         raise MalformedResponse("Usage response contained no valid hourly points")
     return points
+
+
+def parse_free_energy(value: Any, energy: float) -> float | None:
+    """Accept an explicit uncharged subset, never infer it from off-peak pricing."""
+    free = _optional_number(value, allow_negative=False)
+    return free if free is not None and free <= energy else None
 
 
 def _required_identifier(data: Mapping[str, Any], key: str) -> str:

@@ -63,9 +63,9 @@ async def test_history_dates_use_contact_calendar(
     await coordinator._async_update_data()
 
     assert [call.args[0] for call in api.async_get_usage.await_args_list] == [
-        "2026-08-07",
-        "2026-08-08",
         "2026-08-09",
+        "2026-08-08",
+        "2026-08-07",
     ]
 
 
@@ -103,12 +103,14 @@ async def test_initial_refresh_restores_totals_without_fetching_history(
     data = await coordinator._async_update_data()
 
     api.async_get_usage.assert_not_awaited()
+    api.async_get_plan_details.assert_not_awaited()
+    api.async_get_bill_transactions.assert_not_awaited()
     statistics.async_process.assert_awaited_once_with([])
     assert data.statistics is persisted
     assert data.last_successful_usage_fetch is None
 
 
-async def test_usage_gap_does_not_stop_later_days(
+async def test_usage_gap_does_not_stop_older_corrections(
     hass, mock_config_entry, accounts_payload, monkeypatch
 ) -> None:
     sleep = AsyncMock()
@@ -117,15 +119,15 @@ async def test_usage_gap_does_not_stop_later_days(
     )
     api = AsyncMock()
     api.async_get_accounts.return_value = accounts_payload
-    newest_requested_date = dt_util.utcnow().astimezone(
+    oldest_requested_date = dt_util.utcnow().astimezone(
         CONTACT_TIME_ZONE
-    ).date() - timedelta(days=1)
+    ).date() - timedelta(days=3)
     api.async_get_usage.side_effect = [
         RetryableApiError(503, None),
         [],
         [
             {
-                "date": f"{newest_requested_date.isoformat()}T01:00:00+12:00",
+                "date": f"{oldest_requested_date.isoformat()}T01:00:00+12:00",
                 "value": "1.5",
                 "dollarValue": "0.45",
                 "currency": "NZD",
@@ -148,6 +150,30 @@ async def test_usage_gap_does_not_stop_later_days(
     assert len(statistics.points) == 1
     assert data.statistics.energy == 1.5
     assert data.last_successful_usage_fetch is None
+
+
+async def test_recent_usage_survives_rate_limit_on_older_history(
+    hass, mock_config_entry, accounts_payload, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "custom_components.contact_energy.coordinator.HISTORY_REQUEST_SPACING", 0
+    )
+    day = dt_util.utcnow().astimezone(CONTACT_TIME_ZONE).date() - timedelta(days=1)
+    api = AsyncMock()
+    api.async_get_accounts.return_value = accounts_payload
+    api.async_get_usage.side_effect = [
+        [{"date": f"{day.isoformat()}T01:00:00+12:00", "value": 1.5}],
+        RetryableApiError(429, 300),
+    ]
+    statistics = FakeStatistics()
+    coordinator = ContactEnergyCoordinator(hass, mock_config_entry, api, statistics)
+    coordinator.enable_history_fetches()
+    result = await coordinator._async_update_data()
+    assert result.statistics.energy == 1.5
+    assert len(statistics.points) == 1
+    assert api.async_get_usage.await_args_list[0].args[0] == day.isoformat()
+    assert api.async_get_usage.await_count == 2
+    assert result.last_successful_usage_fetch is None
 
 
 async def test_repeated_auth_failure_requests_reauthentication(

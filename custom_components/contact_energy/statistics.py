@@ -2,8 +2,8 @@
 
 import logging
 import math
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime, time, timedelta
 from typing import Any, Protocol
 
 from homeassistant.components.recorder.models import (
@@ -19,8 +19,15 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, MAX_USAGE_DAYS, STORAGE_KEY_PREFIX, STORAGE_VERSION
-from .models import CONTACT_TIME_ZONE, UsagePoint
-from .periods import PeriodSummary, summarise_periods
+from .models import CONTACT_TIME_ZONE, UsagePoint, parse_free_energy
+from .periods import (
+    PeriodSummary,
+    UsageHistory,
+    UsageProfile,
+    summarise_history,
+    summarise_periods,
+    summarise_profile,
+)
 
 _LOGGER = logging.getLogger(__name__)
 SUMMARY_RETENTION_DAYS = 93
@@ -45,6 +52,10 @@ class StatisticsResult:
     currency: str | None
     latest_usage: datetime | None = None
     periods: dict[str, PeriodSummary] = field(default_factory=dict)
+    profile: UsageProfile | None = None
+    history: UsageHistory | None = None
+    observation_started: datetime | None = None
+    first_complete_observed: datetime | None = None
 
 
 class ContactEnergyStatistics:
@@ -74,6 +85,8 @@ class ContactEnergyStatistics:
         self._points: dict[str, dict[str, float | None]] = {}
         self._summary_points: dict[str, dict[str, float | None]] = {}
         self._latest_usage: datetime | None = None
+        self._observation_started: datetime | None = None
+        self._complete_observed: dict[str, str] = {}
 
     @property
     def energy_statistic_id(self) -> str:
@@ -120,6 +133,36 @@ class ContactEnergyStatistics:
             if not _valid_hour_start(parsed):
                 raise StatisticsStateError("Contact Energy latest usage is invalid")
             self._latest_usage = dt_util.as_utc(parsed)
+        now = dt_util.utcnow()
+        self._observation_started = _stored_observation_time(
+            stored.get("observation_started"), now
+        )
+        observations = stored.get("complete_observed", {})
+        if self._observation_started and isinstance(observations, dict):
+            for day, value in observations.items():
+                try:
+                    observed_day = date.fromisoformat(day)
+                except TypeError, ValueError:
+                    continue
+                today = now.astimezone(CONTACT_TIME_ZONE).date()
+                if (
+                    not today - timedelta(days=SUMMARY_RETENTION_DAYS)
+                    <= observed_day
+                    < today
+                ):
+                    continue
+                observed = _stored_observation_time(value, now)
+                day_end = datetime.combine(
+                    observed_day + timedelta(days=1), time(), CONTACT_TIME_ZONE
+                )
+                if (
+                    observed is not None
+                    and observed >= self._observation_started
+                    and observed >= day_end
+                ):
+                    self._complete_observed[observed_day.isoformat()] = (
+                        observed.isoformat()
+                    )
         self._loaded = True
 
     def _load_points(self, raw_points: Any) -> dict[str, dict[str, float | None]]:
@@ -151,6 +194,7 @@ class ContactEnergyStatistics:
             points[normalized_timestamp] = {
                 "energy": energy,
                 "cost": cost,
+                "free_energy": parse_free_energy(values.get("free_energy"), energy),
             }
         return points
 
@@ -188,7 +232,11 @@ class ContactEnergyStatistics:
             elif point.cost is not None:
                 _LOGGER.debug("Ignoring a usage cost with an inconsistent currency")
 
-            new = {"energy": point.energy, "cost": cost}
+            new = {
+                "energy": point.energy,
+                "cost": cost,
+                "free_energy": point.free_energy,
+            }
             if old == new:
                 continue
             self._points[timestamp] = new
@@ -263,6 +311,36 @@ class ContactEnergyStatistics:
                 cost_rows,
             )
 
+        summary_points = [
+            UsagePoint(
+                start=dt_util.parse_datetime(timestamp),
+                energy=values["energy"],
+                cost=values["cost"],
+                currency=self._currency,
+                free_energy=values.get("free_energy"),
+            )
+            for timestamp, values in self._summary_points.items()
+        ]
+        periods = summarise_periods(summary_points, contact_today)
+        history = summarise_history(summary_points, summary_cutoff, contact_today)
+        if self._observation_started is None:
+            self._observation_started = now
+        for day in history.daily:
+            if day.energy is not None:
+                self._complete_observed.setdefault(
+                    day.start.isoformat(), now.isoformat()
+                )
+        self._complete_observed = {
+            day: observed
+            for day, observed in self._complete_observed.items()
+            if summary_cutoff.isoformat() <= day < contact_today.isoformat()
+        }
+        latest = periods.get("latest_day")
+        first_observed = (
+            dt_util.parse_datetime(self._complete_observed[latest.start.isoformat()])
+            if latest is not None
+            else None
+        )
         # Store logs some write failures without raising. Retry each refresh,
         # including unchanged data, so a recovered store receives the current state.
         await self._store.async_save(
@@ -275,26 +353,20 @@ class ContactEnergyStatistics:
                 "latest_usage": (
                     self._latest_usage.isoformat() if self._latest_usage else None
                 ),
+                "observation_started": self._observation_started.isoformat(),
+                "complete_observed": self._complete_observed,
             }
         )
-
         return StatisticsResult(
             energy=energy_total,
             cost=cost_total,
             currency=self._currency,
             latest_usage=self._latest_usage,
-            periods=summarise_periods(
-                [
-                    UsagePoint(
-                        start=dt_util.parse_datetime(timestamp),
-                        energy=values["energy"],
-                        cost=values["cost"],
-                        currency=self._currency,
-                    )
-                    for timestamp, values in self._summary_points.items()
-                ],
-                contact_today,
-            ),
+            periods=periods,
+            profile=summarise_profile(summary_points, periods.get("latest_day")),
+            history=history,
+            observation_started=self._observation_started,
+            first_complete_observed=first_observed,
         )
 
 
@@ -304,6 +376,14 @@ class StatisticsStateError(HomeAssistantError):
 
 class StatisticsDataError(HomeAssistantError):
     """A usage point violates the internal statistics contract."""
+
+
+def _stored_observation_time(value: Any, now: datetime) -> datetime | None:
+    """Discard invalid optional diagnostics without compromising usage totals."""
+    parsed = dt_util.parse_datetime(value) if isinstance(value, str) else None
+    if parsed is None or parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return dt_util.as_utc(parsed) if parsed <= now else None
 
 
 def _stored_nonnegative_number(value: Any, label: str) -> float:
@@ -371,18 +451,27 @@ def _deduplicated_points(points: list[UsagePoint]) -> list[UsagePoint]:
     """Return deterministic points while rejecting conflicting duplicates."""
     selected: dict[str, UsagePoint] = {}
     conflicts: set[str] = set()
+    free_conflicts: set[str] = set()
     for point in points:
         _validate_usage_point(point)
+        point = replace(
+            point, free_energy=parse_free_energy(point.free_energy, point.energy)
+        )
         timestamp = dt_util.as_utc(point.start).isoformat()
         previous = selected.get(timestamp)
-        if previous is not None and previous != point:
-            conflicts.add(timestamp)
-            continue
+        if previous is not None:
+            if replace(previous, free_energy=None) != replace(point, free_energy=None):
+                conflicts.add(timestamp)
+                continue
+            if previous.free_energy != point.free_energy:
+                free_conflicts.add(timestamp)
         selected[timestamp] = point
     if conflicts:
         _LOGGER.debug("Ignoring conflicting duplicate Contact usage points")
     return [
-        selected[timestamp]
+        replace(selected[timestamp], free_energy=None)
+        if timestamp in free_conflicts
+        else selected[timestamp]
         for timestamp in sorted(selected)
         if timestamp not in conflicts
     ]

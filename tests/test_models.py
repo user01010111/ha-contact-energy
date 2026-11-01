@@ -126,6 +126,54 @@ def test_usage_parser_validates_fields_and_ignores_offpeak_semantics() -> None:
     assert points[0].energy == 1.25
     assert points[0].cost == 0.4
     assert points[0].currency == "NZD"
+    assert points[0].free_energy is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0, 0.0),
+        ("0.5", 0.5),
+        (2, 2.0),
+        (None, None),
+        (True, None),
+        (-1, None),
+        ("nan", None),
+        ("inf", None),
+        ("invalid", None),
+        (3, None),
+        (10**400, None),
+    ],
+)
+def test_free_energy_requires_an_explicit_valid_subset(value, expected) -> None:
+    point = parse_usage_points(
+        [
+            {
+                "date": "2026-08-01T01:00:00+12:00",
+                "value": 2,
+                "unchargedValue": value,
+                "offpeakValue": 2,
+                "offpeakDollarValue": 0,
+            }
+        ]
+    )[0]
+    assert point.energy == 2
+    assert point.free_energy == expected
+
+
+@pytest.mark.parametrize("offpeak_cost", [None, 0, "invalid"])
+def test_missing_uncharged_usage_never_falls_back_to_offpeak(offpeak_cost) -> None:
+    point = parse_usage_points(
+        [
+            {
+                "date": "2026-08-01T01:00:00+12:00",
+                "value": 2,
+                "offpeakValue": 2,
+                "offpeakDollarValue": offpeak_cost,
+            }
+        ]
+    )[0]
+    assert point.free_energy is None
 
 
 def test_usage_cost_requires_a_valid_currency() -> None:

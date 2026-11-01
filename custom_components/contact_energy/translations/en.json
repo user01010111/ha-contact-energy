@@ -32,7 +32,7 @@
           "password": "Password",
           "usage_days": "Usage history days"
         },
-        "description": "Enter Contact Energy credentials. Electricity history is limited to 3–31 days. Gas shows the latest bill and does not use this history setting.",
+        "description": "Enter Contact Energy credentials. Electricity history is limited to 3–31 days. Gas shows the latest bill and monthly usage reports; this history setting does not apply to gas.",
         "title": "Connect to Contact Energy"
       }
     }
